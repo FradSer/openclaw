@@ -38,6 +38,7 @@ export default defineConfig({
       "extensions/**/*.test.ts",
       "test/**/*.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",
+      "tests/**/*.test.ts",
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
     ],
@@ -73,6 +74,7 @@ export default defineConfig({
         "apps/**",
         "ui/**",
         "test/**",
+        "tests/**",
         "src/**/*.test.ts",
         // Entrypoints and wiring (covered by CI smoke + manual/e2e flows).
         "src/entry.ts",

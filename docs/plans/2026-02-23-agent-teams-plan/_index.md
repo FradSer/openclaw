@@ -6,12 +6,13 @@ This plan implements Claude Code-style multi-agent team orchestration in OpenCla
 
 **Design Reference:** [Agent Teams Design](../2026-02-23-agent-teams-design/)
 
-**Total Tasks:** 40
+**Total Tasks:** 41
 **Estimated Duration:** ~2 weeks
 
 ## Goal
 
 Implement a complete multi-agent team system with:
+
 - Team creation and lifecycle management
 - Task ledger with atomic claiming and dependency resolution
 - Mailbox protocol for agent-to-agent communication
@@ -67,29 +68,34 @@ graph TB
 ## Phase Structure
 
 ### Phase 1: Core Infrastructure (Tasks 001-008)
+
 - TypeScript types definition
 - SQLite ledger initialization
 - Team storage management
 - Team manager class
 
 ### Phase 2: Team Lifecycle Tools (Tasks 009-014)
+
 - TeamCreate tool
 - TeammateSpawn tool
 - TeamShutdown tool
 - Session state integration
 
 ### Phase 3: Task Management Tools (Tasks 015-023)
+
 - TaskCreate tool
 - TaskList tool
 - TaskClaim tool (atomic)
 - TaskComplete tool
 
 ### Phase 4: Communication Tools (Tasks 024-028)
+
 - SendMessage tool
 - Inbox directory structure
 - Message injection into context
 
 ### Phase 5: Integration & Testing (Tasks 029-040)
+
 - Tool registration
 - Team state injection
 - BDD test scenarios
@@ -142,6 +148,7 @@ graph TB
 ## Verification Strategy
 
 Each task includes verification steps that:
+
 1. Run BDD scenarios via `pnpm test`
 2. Verify atomic operations (task claiming, dependency resolution)
 3. Test concurrency with parallel operations
@@ -151,6 +158,7 @@ Each task includes verification steps that:
 ## Dependencies
 
 This plan depends on:
+
 - Existing OpenClaw session management system
 - `node:sqlite` module availability
 - Vitest testing framework
@@ -159,6 +167,7 @@ This plan depends on:
 ## Success Criteria
 
 The implementation is complete when:
+
 - All 84 BDD scenarios pass
 - Atomic task claiming prevents race conditions
 - Task dependencies resolve correctly

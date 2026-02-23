@@ -19,6 +19,14 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
+import { createSendMessageTool } from "./tools/teams/send-message.js";
+import { createTaskClaimTool } from "./tools/teams/task-claim.js";
+import { createTaskCompleteTool } from "./tools/teams/task-complete.js";
+import { createTaskCreateTool } from "./tools/teams/task-create.js";
+import { createTaskListTool } from "./tools/teams/task-list.js";
+import { createTeamCreateTool } from "./tools/teams/team-create.js";
+import { createTeamShutdownTool } from "./tools/teams/team-shutdown.js";
+import { createTeammateSpawnTool } from "./tools/teams/teammate-spawn.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -173,6 +181,32 @@ export function createOpenClawTools(options?: {
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
+    createTeamCreateTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createTeammateSpawnTool({
+      agentSessionKey: options?.agentSessionKey,
+      agentChannel: options?.agentChannel,
+      agentAccountId: options?.agentAccountId,
+    }),
+    createTeamShutdownTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createTaskCreateTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createTaskListTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createTaskClaimTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createTaskCompleteTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createSendMessageTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
   ];
 
   const pluginTools = resolvePluginTools({

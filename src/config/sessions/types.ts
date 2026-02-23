@@ -164,6 +164,14 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;
+  /** Team context fields */
+  teamId?: string;
+  /** Team role: 'lead' or 'member' */
+  teamRole?: "lead" | "member";
+  /** Team name for reference */
+  teamName?: string;
+  /** Assigned capabilities for team members */
+  teamCapabilities?: string[];
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {
