@@ -6,69 +6,59 @@
 
 ## Description
 
-Implement team storage operations including config file persistence, directory management, and validation functions.
+Implement team storage operations for file-based configuration management in `~/.openclaw/teams/`.
+
+## BDD Scenario
+
+```gherkin
+Feature: Team Storage Implementation
+  As a developer
+  I want file-based team configuration
+  So that team data persists across restarts
+
+  # Must pass all scenarios from Task 004
+  Scenario: Create a new team successfully
+    Given a user requests to create a team named "new-feature-team"
+    When the TeamCreate tool is invoked with valid parameters
+    Then a new team directory is created at ~/.openclaw/teams/new-feature-team/
+```
 
 ## Files to Create
 
-- `src/teams/storage.ts` - Team storage implementation
+- `src/teams/storage.ts` - Storage implementation
 
 ## Implementation Requirements
 
-### Functions
+### Directory Structure
 
-1. **validateTeamName(name: string): boolean**
-   - Returns true if name matches: `/^[a-zA-Z0-9_-]{1,50}$/`
-   - Returns false for invalid names
-
-2. **validateTeamNameOrThrow(name: string): void**
-   - Calls validateTeamName
-   - Throws ToolInputError with descriptive message if invalid
-
-3. **createTeamDirectory(teamName: string, stateDir: string): Promise<void>**
-   - Creates `{stateDir}/teams/{teamName}/` directory
-   - Creates `{stateDir}/teams/{teamName}/inbox/` directory
-   - Uses fs.mkdir with recursive: true
-
-4. **writeTeamConfig(teamName: string, stateDir: string, config: TeamConfig): Promise<void>**
-   - Uses atomic write pattern (write to .tmp file, then rename)
-   - Writes to `{stateDir}/teams/{teamName}/config.json`
-   - Sets file mode to 0o600
-
-5. **readTeamConfig(teamName: string, stateDir: string): Promise<TeamConfig | null>**
-   - Reads from `{stateDir}/teams/{teamName}/config.json`
-   - Returns null if file doesn't exist
-   - Parses JSON and validates structure
-
-6. **deleteTeamDirectory(teamName: string, stateDir: string): Promise<void>**
-   - Uses fs.rm with recursive: true, force: true
-   - Removes `{stateDir}/teams/{teamName}/`
-
-7. **teamDirectoryExists(teamName: string, stateDir: string): Promise<boolean>**
-   - Uses fs.access to check directory existence
-   - Returns boolean
-
-### Atomic Write Pattern
-
-Implement atomic write helper:
-```typescript
-async function atomicWrite(path: string, content: string): Promise<void> {
-  const tmpPath = `${path}.tmp.${randomUUID()}`;
-  try {
-    await fs.writeFile(tmpPath, content, { mode: 0o600 });
-    await fs.rename(tmpPath, path);
-  } catch (err) {
-    await fs.rm(tmpPath, { force: true }).catch(() => {});
-    throw err;
-  }
-}
+```
+~/.openclaw/
+├── teams/
+│   ├── {team_name}/
+│   │   ├── config.json          # Team configuration
+│   │   ├── ledger.db            # SQLite task ledger
+│   │   ├── ledger.db-shm        # WAL shared memory
+│   │   ├── ledger.db-wal        # WAL log
+│   │   └── inbox/
+│   │       ├── {teammate_id}/   # Message queues
+│   │       │   └── messages.jsonl
 ```
 
-## Constraints
+### Key Methods
 
-- All file paths must use path.join()
-- Use path sanitization for team names
-- Set file mode 0o600 for config files
-- Handle ENOENT gracefully in read operations
+- `getTeamDir(teamName: string)` - Get team directory path
+- `createTeamDirectory(teamName: string)` - Create team directory
+- `writeTeamConfig(teamName: string, config: TeamConfig)` - Write config
+- `readTeamConfig(teamName: string)` - Read config
+- `teamExists(teamName: string)` - Check if team exists
+- `validateTeamName(name: string)` - Validate team name format
+- `initializeInbox(teamName: string, memberId: string)` - Create inbox
+
+### Validation
+
+- Team name: 1-50 chars, alphanumeric, hyphen, underscore only
+- No path traversal characters
+- No duplicate team names
 
 ## Verification
 

@@ -6,40 +6,31 @@
 
 ## Description
 
-Implement the SQLite ledger class with schema initialization, WAL mode configuration, and connection management. This provides the database foundation for task and member storage.
+Implement SQLite ledger operations with WAL mode, connection pooling, and atomic operations for task management.
+
+## BDD Scenario
+
+```gherkin
+Feature: SQLite Ledger Implementation
+  As a developer
+  I want robust database operations
+  So that team data is managed reliably
+
+  # Must pass all scenarios from Task 002
+  Scenario: WAL mode enables concurrent reads during writes
+    Given SQLite is configured with WAL mode
+    When a write transaction is in progress
+    Then concurrent read queries return consistent data
+```
 
 ## Files to Create
 
-- `src/teams/ledger.ts` - Ledger class implementation
+- `src/teams/ledger.ts` - Ledger implementation
 
 ## Implementation Requirements
 
-### Ledger Class
+### Database Schema
 
-Create a `TeamLedger` class with:
-
-1. **Constructor**: `constructor(teamName: string, stateDir: string)`
-   - Validates team name format (alphanumeric, hyphen, underscore, 1-50 chars)
-   - Creates team directory if it doesn't exist
-   - Opens database in WAL mode
-   - Initializes schema
-
-2. **openDatabase()**: Private method
-   - Uses `node:sqlite` DatabaseSync
-   - Opens database at `{stateDir}/teams/{teamName}/ledger.db`
-   - Configures WAL mode: `{ mode: 'wal' }`
-   - Sets wal_autocheckpoint to 1000 pages
-
-3. **ensureSchema()**: Private method
-   - Creates tasks table with all columns and CHECK constraints
-   - Creates members table with all columns
-   - Creates messages table with all columns
-   - Creates indexes on tasks table (status, owner, createdAt)
-   - Uses CREATE TABLE IF NOT EXISTS for idempotency
-
-### SQL Schema
-
-Tasks table:
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -56,49 +47,42 @@ CREATE TABLE IF NOT EXISTS tasks (
   completedAt INTEGER
 );
 
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner);
-CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(createdAt);
-```
-
-Members table:
-```sql
 CREATE TABLE IF NOT EXISTS members (
   sessionKey TEXT PRIMARY KEY,
   agentId TEXT NOT NULL,
   name TEXT,
   role TEXT CHECK(role IN ('lead', 'member')),
-  joinedAt INTEGER NOT NULL,
-  lastActiveAt INTEGER
+  joinedAt INTEGER NOT NULL
 );
-```
 
-Messages table:
-```sql
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
-  fromSession TEXT NOT NULL,
-  toSession TEXT NOT NULL,
-  type TEXT NOT NULL CHECK(type IN ('message', 'broadcast', 'shutdown_request', 'shutdown_response', 'idle')),
+  from_session TEXT NOT NULL,
+  to_session TEXT NOT NULL,
+  type TEXT NOT NULL,
   content TEXT NOT NULL,
-  summary TEXT,
-  requestId TEXT,
-  approve INTEGER,
-  reason TEXT,
   createdAt INTEGER NOT NULL,
   delivered INTEGER DEFAULT 0
 );
 ```
 
-### Close Method
+### Key Methods
 
-Implement `close()` method to properly close database connection.
+- `initialize(dbPath: string)` - Initialize database with WAL mode
+- `createTask(task: Task)` - Insert new task
+- `getTask(id: string)` - Get task by ID
+- `listTasks(options: TaskListOptions)` - List tasks with filters
+- `claimTask(taskId: string, owner: string)` - Atomic claim
+- `completeTask(taskId: string)` - Mark complete and unblock dependents
+- `addMember(member: TeamMember)` - Add team member
+- `getMembers(teamId: string)` - Get all team members
 
-## Constraints
+### Concurrency
 
-- Use synchronous DatabaseSync for consistency
-- All file paths must use path.join() for cross-platform compatibility
-- Directory creation should use fs.mkdir with recursive: true
+- Use `better-sqlite3` for synchronous operations
+- Configure WAL mode: `PRAGMA journal_mode=WAL`
+- Implement retry logic with exponential backoff
+- Use atomic UPDATE for task claiming
 
 ## Verification
 
