@@ -25,6 +25,7 @@ vi.mock("../../../teams/storage.js", () => ({
 // Mock manager and pool modules
 vi.mock("../../../teams/pool.js", () => ({
   closeTeamManager: vi.fn(),
+  getTeamManager: vi.fn(),
 }));
 
 // Mock manager class
@@ -69,7 +70,7 @@ describe("TeamShutdown Tool", () => {
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
       // No active members
-      mockManager.listMembers.mockReturnValue([{ name: "member-1", status: "idle" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "member-1", status: "idle" }]);
 
       const tool = createTeamShutdownTool({ agentSessionKey: "test-session" });
       const result = await tool.execute("tool-call-1", { team_name: "my-team" });
@@ -172,8 +173,8 @@ describe("TeamShutdown Tool", () => {
 
       // Two working members
       mockManager.listMembers.mockReturnValue([
-        { name: "researcher", status: "working" },
-        { name: "developer", status: "working" },
+        { sessionKey: "researcher", status: "working" },
+        { sessionKey: "developer", status: "working" },
       ]);
 
       const tool = createTeamShutdownTool({ agentSessionKey: "lead-session" });
@@ -184,25 +185,31 @@ describe("TeamShutdown Tool", () => {
 
       expect(mockManager.storeMessage).toHaveBeenCalledTimes(2);
 
-      expect(mockManager.storeMessage).toHaveBeenCalledWith({
-        id: "test-uuid-1234",
-        type: "shutdown_request",
-        sender: "lead-session",
-        recipient: "researcher",
-        content: "Project completed",
-        requestId: "test-uuid-1234",
-        timestamp: expect.any(Number),
-      });
+      expect(mockManager.storeMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "test-uuid-1234",
+          type: "shutdown_request",
+          sender: "lead-session",
+          recipient: "researcher",
+          content: "Project completed",
+          requestId: "test-uuid-1234",
+          from: "lead-session",
+          to: "researcher",
+        }),
+      );
 
-      expect(mockManager.storeMessage).toHaveBeenCalledWith({
-        id: "test-uuid-1234",
-        type: "shutdown_request",
-        sender: "lead-session",
-        recipient: "developer",
-        content: "Project completed",
-        requestId: "test-uuid-1234",
-        timestamp: expect.any(Number),
-      });
+      expect(mockManager.storeMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "test-uuid-1234",
+          type: "shutdown_request",
+          sender: "lead-session",
+          recipient: "developer",
+          content: "Project completed",
+          requestId: "test-uuid-1234",
+          from: "lead-session",
+          to: "developer",
+        }),
+      );
     });
 
     it("should return pending status with requestId", async () => {
@@ -218,7 +225,7 @@ describe("TeamShutdown Tool", () => {
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
-      mockManager.listMembers.mockReturnValue([{ name: "worker", status: "working" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "worker", status: "working" }]);
 
       const tool = createTeamShutdownTool();
       const result = await tool.execute("tool-call-1", { team_name: "my-team" });
@@ -245,9 +252,9 @@ describe("TeamShutdown Tool", () => {
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
       mockManager.listMembers.mockReturnValue([
-        { name: "researcher", status: "working" },
-        { name: "developer", status: "working" },
-        { name: "tester", status: "idle" },
+        { sessionKey: "researcher", status: "working" },
+        { sessionKey: "developer", status: "working" },
+        { sessionKey: "tester", status: "idle" },
       ]);
 
       const tool = createTeamShutdownTool();
@@ -270,7 +277,7 @@ describe("TeamShutdown Tool", () => {
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
-      mockManager.listMembers.mockReturnValue([{ name: "worker", status: "working" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "worker", status: "working" }]);
 
       const tool = createTeamShutdownTool();
       await tool.execute("tool-call-1", { team_name: "my-team" });
@@ -295,7 +302,7 @@ describe("TeamShutdown Tool", () => {
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
-      mockManager.listMembers.mockReturnValue([{ name: "worker", status: "working" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "worker", status: "working" }]);
 
       const tool = createTeamShutdownTool();
       const result = await tool.execute("tool-call-1", { team_name: "my-team" });
@@ -320,7 +327,7 @@ describe("TeamShutdown Tool", () => {
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
-      mockManager.listMembers.mockReturnValue([{ name: "worker", status: "working" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "worker", status: "working" }]);
 
       const tool = createTeamShutdownTool();
       await tool.execute("tool-call-1", { team_name: "my-team" });
@@ -357,7 +364,7 @@ describe("TeamShutdown Tool", () => {
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
       // Scenario: all members have already approved (status: idle)
-      mockManager.listMembers.mockReturnValue([{ name: "worker", status: "idle" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "worker", status: "idle" }]);
 
       const tool = createTeamShutdownTool();
       const result = await tool.execute("tool-call-1", { team_name: "my-team" });
@@ -393,7 +400,7 @@ describe("TeamShutdown Tool", () => {
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
-      mockManager.listMembers.mockReturnValue([{ name: "worker", status: "working" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "worker", status: "working" }]);
 
       const tool = createTeamShutdownTool();
       await tool.execute("tool-call-1", { team_name: "my-team" });
@@ -421,7 +428,7 @@ describe("TeamShutdown Tool", () => {
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
-      mockManager.listMembers.mockReturnValue([{ name: "worker", status: "working" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "worker", status: "working" }]);
 
       const tool = createTeamShutdownTool();
       const result = await tool.execute("tool-call-1", {
@@ -455,7 +462,7 @@ describe("TeamShutdown Tool", () => {
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
-      mockManager.listMembers.mockReturnValue([{ name: "worker", status: "working" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "worker", status: "working" }]);
 
       const tool = createTeamShutdownTool();
       const result = await tool.execute("tool-call-1", { team_name: "my-team" });
@@ -609,9 +616,9 @@ describe("TeamShutdown Tool", () => {
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
       mockManager.listMembers.mockReturnValue([
-        { name: "worker-1", status: "working" },
-        { name: "worker-2", status: "idle" },
-        { name: "worker-3", status: "blocked" },
+        { sessionKey: "worker-1", status: "working" },
+        { sessionKey: "worker-2", status: "idle" },
+        { sessionKey: "worker-3", status: "blocked" },
       ]);
 
       const tool = createTeamShutdownTool();
@@ -640,8 +647,8 @@ describe("TeamShutdown Tool", () => {
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
       mockManager.listMembers.mockReturnValue([
-        { name: "worker-1", status: "idle" },
-        { name: "worker-2", status: "idle" },
+        { sessionKey: "worker-1", status: "idle" },
+        { sessionKey: "worker-2", status: "idle" },
       ]);
 
       const tool = createTeamShutdownTool();
@@ -677,7 +684,7 @@ describe("TeamShutdown Tool", () => {
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
-      mockManager.listMembers.mockReturnValue([{ name: "worker", status: "working" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "worker", status: "working" }]);
 
       const tool = createTeamShutdownTool({ agentSessionKey: "custom-lead" });
       await tool.execute("tool-call-1", { team_name: "my-team" });
@@ -702,7 +709,7 @@ describe("TeamShutdown Tool", () => {
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
 
-      mockManager.listMembers.mockReturnValue([{ name: "worker", status: "working" }]);
+      mockManager.listMembers.mockReturnValue([{ sessionKey: "worker", status: "working" }]);
 
       const tool = createTeamShutdownTool();
       await tool.execute("tool-call-1", { team_name: "my-team" });

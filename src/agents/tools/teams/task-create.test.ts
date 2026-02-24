@@ -42,7 +42,16 @@ describe("TaskCreate Tool", () => {
 
     // Mock manager
     mockManager = {
-      createTask: vi.fn().mockResolvedValue("test-task-uuid-1234"),
+      createTask: vi.fn().mockReturnValue({
+        id: "test-task-uuid-1234",
+        subject: "Mock task",
+        description: "Mock description",
+        status: "pending" as const,
+        createdAt: Date.now(),
+        dependsOn: [],
+        blockedBy: [],
+        blocks: [],
+      }),
       addTaskDependency: vi.fn().mockReturnValue(true),
       detectCircularDependencies: vi.fn().mockReturnValue([]),
     };
@@ -452,9 +461,9 @@ describe("TaskCreate Tool", () => {
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
 
-      mockManager.createTask.mockRejectedValue(
-        new Error("Circular dependency detected: task-1 -> task-2 -> task-1"),
-      );
+      mockManager.createTask.mockImplementation(() => {
+        throw new Error("Circular dependency detected: task-1 -> task-2 -> task-1");
+      });
 
       const tool = createTaskCreateTool();
 
@@ -475,7 +484,9 @@ describe("TaskCreate Tool", () => {
       (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
 
-      mockManager.createTask.mockRejectedValue(new Error("Dependency task-999 does not exist"));
+      mockManager.createTask.mockImplementation(() => {
+        throw new Error("Dependency task-999 does not exist");
+      });
 
       const tool = createTaskCreateTool();
 
