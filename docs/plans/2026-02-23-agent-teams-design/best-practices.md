@@ -1,672 +1,379 @@
 # Agent Teams Best Practices
 
+## Code Organization
+
+### File Structure
+
+Team-related code follows the established patterns:
+
+```
+src/
+├── teams/                      # Core infrastructure
+│   ├── manager.ts              # High-level orchestration
+│   ├── ledger.ts               # SQLite operations
+│   ├── types.ts                # Type definitions
+│   ├── storage.ts              # Filesystem operations
+│   ├── inbox.ts                # Message queues
+│   ├── pool.ts                 # Connection caching
+│   ├── limits.ts               # Resource limits
+│   ├── cleanup.ts              # Maintenance
+│   ├── context-injection.ts    # Message to XML
+│   └── state-injection.ts      # Team state injection
+│
+└── agents/tools/teams/         # Tool implementations
+    ├── team-create.ts
+    ├── teammate-spawn.ts
+    ├── team-shutdown.ts
+    ├── task-create.ts
+    ├── task-list.ts
+    ├── task-claim.ts
+    ├── task-complete.ts
+    ├── task-find-available.ts
+    ├── task-auto-claim.ts
+    └── send-message.ts
+```
+
+### Naming Conventions
+
+**Tool names use snake_case:**
+
+```typescript
+name: "team_create";
+name: "task_claim";
+name: "send_message";
+```
+
+**Parameters use snake_case:**
+
+```typescript
+team_name: string;
+agent_type: string;
+request_id: string;
+```
+
+**File names use kebab-case:**
+
+```
+team-create.ts
+task-claim.ts
+send-message.ts
+```
+
+## Type Definitions
+
+Centralize types in `src/teams/types.ts`:
+
+```typescript
+export interface TeamConfig {
+  id: string; // UUID
+  name: string; // Path-safe identifier (1-50 chars)
+  description?: string;
+  agentType?: string;
+  createdAt: number;
+  updatedAt: number;
+  status: "active" | "shutdown";
+  leadSessionKey: string;
+}
+
+export interface Task {
+  id: string; // UUID
+  subject: string; // Max 200 chars
+  description: string; // Max 10000 chars
+  activeForm?: string; // Present continuous form
+  status: "pending" | "claimed" | "in_progress" | "completed" | "failed";
+  owner?: string; // Session key of claimer
+  dependsOn?: string[]; // Task IDs this depends on
+  blockedBy?: string[]; // Computed blocking tasks
+  metadata?: Record<string, unknown>;
+  createdAt: number;
+  claimedAt?: number;
+  completedAt?: number;
+}
+
+export interface TeamMessage {
+  id: string; // UUID
+  from: string; // Sender session key
+  to?: string; // Recipient (empty for broadcast)
+  type: "message" | "broadcast" | "shutdown_request" | "shutdown_response" | "idle";
+  content: string; // Max 100KB
+  summary?: string; // 5-10 words
+  requestId?: string; // For shutdown protocol
+  approve?: boolean; // For shutdown_response
+  reason?: string; // Rejection reason
+  timestamp: number;
+}
+```
+
 ## Security Guidelines
 
-### 1. Path Traversal Prevention
+### 1. Team Name Validation
 
-Always sanitize team names and session keys when constructing file paths:
+Validate team names to prevent path traversal:
+
+```typescript
+// Valid: lowercase alphanumeric, hyphens, 1-50 chars
+const TEAM_NAME_REGEX = /^[a-z0-9-]{1,50}$/;
+
+function validateTeamNameOrThrow(name: string): void {
+  if (!TEAM_NAME_REGEX.test(name)) {
+    throw new Error("Team name must be 1-50 lowercase alphanumeric characters or hyphens");
+  }
+  // Additional checks
+  if (name.startsWith("-") || name.endsWith("-")) {
+    throw new Error("Team name cannot start or end with hyphen");
+  }
+  if (name.includes("--")) {
+    throw new Error("Team name cannot contain consecutive hyphens");
+  }
+}
+```
+
+### 2. Session Key Sanitization
+
+Sanitize session keys before using in file paths:
 
 ```typescript
 function sanitizeSessionKey(sessionKey: string): string {
-  return sessionKey.replace(/[.\/\\]/g, "_").substring(0, 100);
-}
-
-function validateTeamName(name: string): boolean {
-  return /^[a-zA-Z0-9_-]{1,50}$/.test(name);
-}
-```
-
-### 2. Team Isolation
-
-- Each team directory is completely isolated
-- SQLite database is scoped to a single team
-- Inbox directories are per-session scoped
-- Never allow cross-team message routing through tools
-
-### 3. Permission Scoping
-
-Team Lead should have restricted tool permissions:
-
-```typescript
-// Team Lead tool profile - orchestration only
-const TEAM_LEAD_TOOLS = [
-  "team_create",
-  "teammate_spawn",
-  "team_shutdown",
-  "task_create",
-  "task_list",
-  "send_message",
-];
-
-// Teammate tool profile - execution focused
-const TEAMMATE_TOOLS = [
-  "task_list",
-  "task_claim",
-  "task_complete",
-  "send_message",
-  "browser",
-  "bash",
-  // ... execution tools
-];
-```
-
-### 4. Docker Sandbox Enforcement
-
-Teammate sessions should always run in Docker sandbox when enabled:
-
-```typescript
-// When spawning teammate
-const result = await spawnSubagentDirect(
-  {
-    task,
-    agentId,
-    // ...
-  },
-  {
-    // Context ensures sandbox is inherited
-    agentSessionKey: opts.agentSessionKey,
-  },
-);
-```
-
-### 5. Message Content Validation
-
-Validate and sanitize message content to prevent injection attacks:
-
-```typescript
-function validateMessageContent(content: string): { valid: boolean; error?: string } {
-  if (!content || content.length === 0) {
-    return { valid: false, error: "Message content cannot be empty" };
-  }
-
-  if (content.length > 100_000) {
-    return { valid: false, error: "Message content too large" };
-  }
-
-  return { valid: true };
+  return sessionKey
+    .replace(/[./\\]/g, "_") // Remove path separators
+    .replace(/:/g, "_") // Remove colons
+    .substring(0, 100); // Limit length
 }
 ```
 
-### 6. Communication Auditing
+### 3. Team Isolation
 
-Log all team communication for security monitoring:
+Enforce strict isolation between teams:
+
+1. **Storage Isolation**: Each team has its own `config.json` and `ledger.db`
+2. **Access Control**: Verify session key belongs to registered member
+3. **No Cross-Team Access**: A session can only access its own team's resources
 
 ```typescript
-async function logTeamMessage(teamId: string, message: TeamMessage): Promise<void> {
-  const auditLog = path.join(resolveStateDir(), "teams", teamId, "audit.log");
-  const entry = {
-    timestamp: Date.now(),
-    from: message.from,
-    to: message.to,
-    type: message.type,
-    size: message.content.length,
-  };
-  await fs.appendFile(auditLog, JSON.stringify(entry) + "\n");
+function verifyTeamMembership(teamName: string, sessionKey: string): boolean {
+  const manager = getTeamManager(teamName, stateDir);
+  const members = manager.listMembers();
+  return members.some((m) => m.sessionKey === sessionKey);
+}
+```
+
+### 4. Message Content Validation
+
+Sanitize messages before injection:
+
+```typescript
+function escapeXml(content: string): string {
+  return content
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 ```
 
 ## Performance Guidelines
 
-### 1. SQLite Connection Pooling
+### 1. SQLite Connection Management
 
-Reuse database connections per team to avoid overhead:
+Reuse connections via the pool:
 
 ```typescript
-const connectionCache = new Map<string, TeamManager>();
+// Good: Use pool
+const manager = getTeamManager(teamName, stateDir);
 
-export function getTeamManager(teamName: string): TeamManager {
-  if (!connectionCache.has(teamName)) {
-    connectionCache.set(teamName, new TeamManager(teamName, resolveStateDir()));
-  }
-  return connectionCache.get(teamName)!;
-}
-
-// Clean up on team shutdown
-export function closeTeamManager(teamName: string): void {
-  const manager = connectionCache.get(teamName);
-  if (manager) {
-    manager.close();
-    connectionCache.delete(teamName);
-  }
-}
+// Bad: Create new connection each time
+const manager = new TeamManager(teamName, stateDir);
 ```
 
 ### 2. WAL Configuration
 
-Configure WAL mode for optimal concurrent performance:
+Enable WAL mode for concurrent access:
 
 ```typescript
-const db = new DatabaseSync(dbPath, { mode: "wal" });
-
-// Auto-checkpoint every 1000 pages (configurable)
-db.pragma("wal_autocheckpoint = 1000");
-
-// Alternatively, manual checkpoint
-db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+db.exec("PRAGMA journal_mode = WAL");
+db.exec("PRAGMA wal_autocheckpoint = 1000");
+db.exec("PRAGMA synchronous = NORMAL");
 ```
 
-### 3. Index Strategy
+### 3. Atomic Task Claiming
 
-Create indexes for common query patterns:
-
-```sql
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner);
-CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(createdAt);
-CREATE INDEX IF NOT EXISTS idx_tasks_blocked_by ON tasks(blockedBy);
-```
-
-### 4. Batching for Bulk Operations
-
-When adding multiple tasks, use transactions:
+Use SQL WHERE clause for atomic updates:
 
 ```typescript
-async function createTasks(taskParams: TaskParams[]): Promise<string[]> {
-  const taskIds: string[] = [];
-  const db = this.db;
+// Good: Atomic update
+const stmt = db.prepare(`
+  UPDATE tasks
+  SET status = 'in_progress', owner = ?, claimedAt = ?
+  WHERE id = ? AND status = 'pending' AND (owner IS NULL OR owner = '')
+`);
+const result = stmt.run(owner, Date.now(), taskId);
+return result.changes > 0;
 
-  db.exec("BEGIN TRANSACTION");
-
-  try {
-    const stmt = db.prepare(`
-      INSERT INTO tasks (id, subject, description, activeForm, status, dependsOn, metadata, createdAt)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
-    `);
-
-    for (const params of taskParams) {
-      const taskId = randomUUID();
-      stmt.run(
-        taskId,
-        params.subject,
-        params.description,
-        params.activeForm,
-        JSON.stringify(params.dependsOn),
-        JSON.stringify(params.metadata),
-        Date.now(),
-      );
-      taskIds.push(taskId);
-    }
-
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-
-  return taskIds;
+// Bad: Read-modify-write (race condition)
+const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId);
+if (task.status === "pending") {
+  db.prepare("UPDATE tasks SET owner = ? WHERE id = ?").run(owner, taskId);
 }
 ```
 
-### 5. Message Cleanup
+### 4. SQLITE_BUSY Handling
 
-Periodically clean up old messages to prevent disk bloat:
+Implement exponential backoff:
 
 ```typescript
-async function cleanupOldMessages(teamName: string, maxAge = 24 * 60 * 60 * 1000): Promise<void> {
-  const inboxDir = path.join(resolveStateDir(), "teams", teamName, "inbox");
-  const now = Date.now();
-
-  const entries = await fs.readdir(inboxDir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-
-    const messagesFile = path.join(inboxDir, entry.name, "messages.jsonl");
+async function withRetry<T>(fn: () => T, maxAttempts = 5, baseDelay = 50): Promise<T> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const content = await fs.readFile(messagesFile, "utf-8");
-      const lines = content.trim().split("\n").filter(Boolean);
-      const messages: TeamMessage[] = lines.map((line) => JSON.parse(line));
-
-      const recent = messages.filter((m) => now - m.timestamp < maxAge);
-
-      if (recent.length < messages.length) {
-        const newContent = recent.map((m) => JSON.stringify(m)).join("\n") + "\n";
-        await fs.writeFile(messagesFile, newContent, { mode: 0o600 });
+      return fn();
+    } catch (err: any) {
+      if (err.code === "SQLITE_BUSY" || err.code === "SQLITE_LOCKED") {
+        const delay = baseDelay * Math.pow(2, attempt);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
       }
-    } catch (err) {
-      if (err.code !== "ENOENT") throw err;
+      throw err;
     }
   }
+  throw new Error("Database locked after max retries");
 }
 ```
 
-## Code Quality Guidelines
+### 5. Inbox Cleanup
 
-### 1. Type Safety
-
-Always use explicit types, avoid `any`:
+Delete messages after reading to prevent unbounded growth:
 
 ```typescript
-// Good
-interface TaskClaimResult {
-  success: boolean;
-  taskId: string;
-  error?: string;
-}
-
-async function claimTask(taskId: string, sessionKey: string): Promise<TaskClaimResult> {
-  // ...
-}
-
-// Bad
-async function claimTask(taskId: string, sessionKey: string): Promise<any> {
-  // ...
-}
-```
-
-### 2. Error Handling
-
-Use structured error types:
-
-```typescript
-export class TeamError extends Error {
-  constructor(
-    message: string,
-    public code: string,
-    public details?: Record<string, unknown>,
-  ) {
-    super(message);
-    this.name = "TeamError";
+async function consumeInbox(inboxPath: string): Promise<TeamMessage[]> {
+  try {
+    const content = await readFile(inboxPath, "utf8");
+    const messages = parseMessages(content);
+    await unlink(inboxPath); // Delete immediately
+    return messages;
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
   }
 }
-
-// Usage
-throw new TeamError("Team not found", "TEAM_NOT_FOUND", { teamId });
 ```
 
-### 3. Validation with TypeBox
+## Resource Limits
 
-Use TypeBox schemas for tool parameters:
+Enforce limits defined in `src/teams/limits.ts`:
 
-```typescript
-import { Type } from "@sinclair/typebox";
-
-const TaskCreateSchema = Type.Object({
-  team_name: Type.String({ minLength: 1, maxLength: 50 }),
-  subject: Type.String({ minLength: 1, maxLength: 200 }),
-  description: Type.String({ minLength: 1, maxLength: 10_000 }),
-  activeForm: Type.Optional(Type.String({ maxLength: 100 })),
-  dependsOn: Type.Optional(Type.Array(Type.String())),
-  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-});
-```
-
-### 4. File Size Limits
-
-Enforce reasonable limits to prevent resource exhaustion:
+| Resource             | Limit       |
+| -------------------- | ----------- |
+| Max teams            | 10          |
+| Max members per team | 10          |
+| Max tasks per team   | 1000        |
+| Max message size     | 100KB       |
+| Max task subject     | 200 chars   |
+| Max task description | 10000 chars |
+| Max team name length | 50 chars    |
 
 ```typescript
-const MAX_TASK_DESCRIPTION = 10_000;
-const MAX_MESSAGE_SIZE = 100_000;
-const MAX_TASKS_PER_TEAM = 1000;
-const MAX_MEMBERS_PER_TEAM = 10;
-
-function validateTaskDescription(description: string): boolean {
-  return description.length <= MAX_TASK_DESCRIPTION;
-}
-```
-
-### 5. Atomic File Operations
-
-Use atomic write patterns for persistence:
-
-```typescript
-async function atomicWrite(path: string, content: string): Promise<void> {
-  const tmpPath = `${path}.tmp.${randomUUID()}`;
-  try {
-    await fs.writeFile(tmpPath, content, { mode: 0o600 });
-    await fs.rename(tmpPath, path);
-  } catch (err) {
-    await fs.rm(tmpPath, { force: true }).catch(() => {});
-    throw err;
+export function enforceLimits(teamName: string, team: TeamState): void {
+  if (team.members.length >= MAX_MEMBERS) {
+    throw new Error(`Team ${teamName} has reached maximum members (${MAX_MEMBERS})`);
+  }
+  if (team.tasks.length >= MAX_TASKS) {
+    throw new Error(`Team ${teamName} has reached maximum tasks (${MAX_TASKS})`);
   }
 }
 ```
 
 ## Testing Guidelines
 
-### 1. Unit Tests
+### Test File Organization
 
-Test individual functions in isolation:
-
-```typescript
-describe("sanitizeSessionKey", () => {
-  it("removes dangerous characters", () => {
-    expect(sanitizeSessionKey("agent:test/../key")).toBe("agent:test___key");
-  });
-
-  it("limits length", () => {
-    const longKey = "a".repeat(200);
-    expect(sanitizeSessionKey(longKey).length).toBe(100);
-  });
-});
+```
+src/teams/
+├── manager.test.ts        # Core operations
+├── ledger.test.ts         # SQLite operations
+├── inbox.test.ts          # Message storage
+├── storage.test.ts        # Filesystem operations
+├── pool.test.ts           # Connection caching
+├── limits.test.ts         # Resource limits
+├── cleanup.test.ts        # Maintenance
+├── context-injection.test.ts  # XML formatting
+├── state-injection.test.ts    # State formatting
+├── security.test.ts       # Security tests
+├── performance.test.ts    # Concurrency tests
+└── e2e.test.ts            # End-to-end workflows
 ```
 
-### 2. Integration Tests
-
-Test tool interactions:
+### Test Patterns
 
 ```typescript
-describe("TaskClaim workflow", () => {
-  it("claims task atomically", async () => {
-    const manager = new TeamManager("test-team", testStateDir);
-    const taskId = await manager.createTask({ subject: "Test", description: "Test" });
+describe("TeamManager", () => {
+  let manager: TeamManager;
+  let tempDir: string;
 
-    const claim1 = await manager.claimTask(taskId, "agent-1");
-    const claim2 = await manager.claimTask(taskId, "agent-2");
-
-    expect(claim1.success).toBe(true);
-    expect(claim2.success).toBe(false);
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "teams-test-"));
+    manager = new TeamManager("test-team", tempDir);
   });
-});
-```
 
-### 3. Concurrency Tests
+  afterEach(() => {
+    manager.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
 
-Test race conditions:
+  it("should claim task atomically", () => {
+    // Create task
+    const task = manager.createTask("Test", "Description");
 
-```typescript
-describe("Concurrent task claiming", () => {
-  it("prevents double assignment", async () => {
-    const manager = new TeamManager("test-team", testStateDir);
-    const taskId = await manager.createTask({ subject: "Test", description: "Test" });
+    // First claim succeeds
+    const result1 = manager.claimTask(task.id, "agent1");
+    expect(result1.success).toBe(true);
 
-    const [claim1, claim2] = await Promise.all([
-      manager.claimTask(taskId, "agent-1"),
-      manager.claimTask(taskId, "agent-2"),
-    ]);
-
-    const successCount = [claim1, claim2].filter((c) => c.success).length;
-    expect(successCount).toBe(1);
+    // Second claim fails
+    const result2 = manager.claimTask(task.id, "agent2");
+    expect(result2.success).toBe(false);
+    expect(result2.reason).toBe("Task already claimed by another agent");
   });
 });
 ```
 
-### 4. BDD Tests
+## Error Messages
 
-Follow Gherkin scenarios:
-
-```gherkin
-Scenario: Atomic task claiming prevents race conditions
-  Given a pending task with ID 5
-  And two idle members "agent-fast" and "agent-slow"
-  When both members attempt to claim the task simultaneously
-  Then only one member successfully claims the task
-  And the other member receives a conflict error
-```
-
-## Concurrency Best Practices
-
-### 1. Transaction Boundaries
-
-Keep transactions short and focused:
+Provide clear, actionable error messages:
 
 ```typescript
-// Good - single operation
-async function claimTask(taskId: string, sessionKey: string): Promise<boolean> {
-  const stmt = this.db.prepare(`
-    UPDATE tasks SET status = 'claimed', owner = ?, claimedAt = ?
-    WHERE id = ? AND status = 'pending' AND owner IS NULL
-  `);
-  const result = stmt.exec(sessionKey, Date.now(), taskId);
-  return result.changes > 0;
-}
+// Good: Clear and actionable
+"Team 'alpha-squad' already exists. Please choose a different name.";
+"Task 'abc-123' has unmet dependencies: ['def-456', 'ghi-789']";
+"Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true";
 
-// Bad - multiple unrelated operations in one transaction
-async function doEverything(teamId: string): Promise<void> {
-  db.exec("BEGIN");
-  // ... many operations ...
-  db.exec("COMMIT");
-}
+// Bad: Vague and unhelpful
+"Error";
+"Failed to create team";
+"Invalid input";
 ```
 
-### 2. Retry Logic with Backoff
+## Integration with agentToAgent
 
-Handle SQLITE_BUSY gracefully:
-
-```typescript
-async function withRetry<T>(fn: () => T, maxAttempts = 5, baseDelay = 50): Promise<T> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (err.code === "SQLITE_BUSY" && attempt < maxAttempts - 1) {
-        const delay = baseDelay * Math.pow(2, attempt);
-        await sleep(delay);
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw new Error("Max retry attempts exceeded");
-}
-```
-
-### 3. Lock Ordering
-
-Always acquire locks in consistent order to prevent deadlocks:
+For cross-team or cross-agent communication, integrate with the existing `agentToAgent` policy:
 
 ```typescript
-// Always claim tasks by ID order to prevent deadlocks
-async function claimMultipleTasks(taskIds: string[], sessionKey: string): Promise<boolean[]> {
-  const sortedIds = [...taskIds].sort();
-  const results: boolean[] = [];
+import { createAgentToAgentPolicy } from "../sessions-access.js";
 
-  for (const taskId of sortedIds) {
-    results.push(await this.claimTask(taskId, sessionKey));
-  }
-
-  return results;
-}
-```
-
-## Observability Guidelines
-
-### 1. Logging
-
-Use structured logging:
-
-```typescript
-import { logDebug } from "../logger.js";
-
-logDebug("Team created", { teamId, teamName, agentType });
-logDebug("Task claimed", { teamId, taskId, sessionKey });
-logDebug("Message sent", { teamId, from, to, type });
-```
-
-### 2. Metrics
-
-Track key metrics:
-
-```typescript
-const metrics = {
-  teamsCreated: 0,
-  tasksCreated: 0,
-  tasksClaimed: 0,
-  tasksCompleted: 0,
-  messagesSent: 0,
-};
-
-function incrementMetric(name: keyof typeof metrics): void {
-  metrics[name]++;
-}
-```
-
-### 3. Status Reporting
-
-Provide team status for UI:
-
-```typescript
-async function getTeamStatus(teamId: string): Promise<TeamStatus> {
-  const tasks = await listTasks(teamId);
-  const members = await listMembers(teamId);
+export function createTeamMessagingPolicy(
+  cfg: OpenClawConfig,
+  teamConfig: TeamConfig,
+): TeamMessagingPolicy {
+  const a2aPolicy = createAgentToAgentPolicy(cfg);
 
   return {
-    teamId,
-    status: "active",
-    memberCount: members.length,
-    pendingTasks: tasks.filter((t) => t.status === "pending").length,
-    inProgressTasks: tasks.filter((t) => t.status === "in_progress").length,
-    completedTasks: tasks.filter((t) => t.status === "completed").length,
+    canSend(fromSession: string, toMember: string): boolean {
+      const fromMember = teamConfig.members.find((m) => m.sessionKey === fromSession);
+      const toMemberData = teamConfig.members.find((m) => m.name === toMember);
+
+      if (!fromMember || !toMemberData) return false;
+
+      // Reuse A2A bidirectional check
+      return a2aPolicy.isAllowed(fromMember.agentId, toMemberData.agentId);
+    },
   };
 }
 ```
-
-## Context Management Guidelines
-
-### 1. Ground Truth Injection
-
-Always inject team state before Team Lead inference:
-
-```typescript
-function injectTeamState(session: SessionEntry): string {
-  if (!session.teamId || session.teamRole !== "lead") {
-    return "";
-  }
-
-  const teamState = loadTeamState(session.teamId);
-  let state = "\n\n=== TEAM STATE ===\n";
-  state += `Team: ${teamState.name}\n`;
-  state += `Members: ${teamState.members.map((m) => m.name).join(", ")}\n`;
-  state += `Pending Tasks: ${teamState.pendingTaskCount}\n`;
-  state += "====================\n";
-
-  return state;
-}
-```
-
-### 2. Context Compression Handling
-
-Team state must survive context compression:
-
-```typescript
-// Store team state separately from conversation history
-const teamStateCache = new Map<string, TeamState>();
-
-// Load on demand, persist to file
-function getTeamState(teamId: string): TeamState {
-  if (!teamStateCache.has(teamId)) {
-    const state = loadTeamStateFromFile(teamId);
-    teamStateCache.set(teamId, state);
-  }
-  return teamStateCache.get(teamId)!;
-}
-```
-
-### 3. Message Summarization
-
-Provide short summaries for UI preview:
-
-```typescript
-function summarizeMessage(content: string, maxWords = 10): string {
-  const words = content.trim().split(/\s+/);
-  if (words.length <= maxWords) {
-    return content;
-  }
-  return words.slice(0, maxWords).join(" ") + "...";
-}
-```
-
-## Resource Limits
-
-### 1. Team Limits
-
-| Resource             | Limit | Configurable |
-| -------------------- | ----- | ------------ |
-| Max teams            | 10    | Yes          |
-| Max members per team | 10    | Yes          |
-| Max tasks per team   | 1000  | Yes          |
-| Max message size     | 100KB | Yes          |
-| Max task description | 10KB  | Yes          |
-
-### 2. Timeout Configuration
-
-| Operation         | Timeout    | Notes               |
-| ----------------- | ---------- | ------------------- |
-| Task claim        | 30 seconds | With retry          |
-| Task completion   | 1 hour     | Depends on task     |
-| Shutdown response | 60 seconds | Per member          |
-| Message delivery  | Immediate  | Async, non-blocking |
-| Teammate spawn    | 10 seconds | Via subagent        |
-
-### 3. Cleanup Policies
-
-| Resource        | Policy                 | Trigger             |
-| --------------- | ---------------------- | ------------------- |
-| Inactive teams  | Delete after 7 days    | Cron job            |
-| Completed tasks | Archive after 30 days  | Cron job            |
-| Old messages    | Delete after 24 hours  | Per-session cleanup |
-| Temporary files | Clean on team shutdown | Shutdown handler    |
-| Processed inbox | Rename + async delete  | After injection     |
-
-## Subagent Integration Guidelines
-
-### 1. Teammate as Subagent
-
-Teammates should spawn via `spawnSubagentDirect`:
-
-```typescript
-const result = await spawnSubagentDirect(
-  {
-    task: `Join team ${teamName} as ${name}`,
-    label: name,
-    agentId: requestedAgentId,
-    model: modelOverride,
-    mode: "session", // Persistent session
-    thread: true, // Thread-bound for follow-ups
-    cleanup: "keep", // Keep session for mailbox
-  },
-  {
-    agentSessionKey: teamLeadSessionKey,
-  },
-);
-```
-
-### 2. Completion Announce
-
-Use `runSubagentAnnounceFlow` for task completion:
-
-```typescript
-await runSubagentAnnounceFlow({
-  childSessionKey: teammateSessionKey,
-  childRunId: `${teamName}:${taskId}`,
-  requesterSessionKey: teamLeadSessionKey,
-  task: taskSubject,
-  timeoutMs: 30000,
-  cleanup: "keep",
-  roundOneReply: `Task "${taskSubject}" completed`,
-  announceType: "teammate",
-});
-```
-
-### 3. Depth Tracking
-
-Teammates can spawn sub-subagents with proper depth tracking:
-
-```typescript
-// Depth is automatically tracked via session store
-// Default max depth: 5
-// Teammate starts at depth 1 (child of team lead)
-// Teammate's subagent would be at depth 2
-```
-
-## Comparison: Claude Code vs OpenClaw
-
-| Aspect        | Claude Code              | OpenClaw (Revised)             |
-| ------------- | ------------------------ | ------------------------------ |
-| Spawn backend | tmux, iTerm2, in-process | `spawnSubagentDirect()`        |
-| Session key   | Custom format            | `agent:${id}:teammate:${uuid}` |
-| Lane          | N/A                      | `AGENT_LANE_TEAMMATE`          |
-| Communication | Mailbox only             | Mailbox + Announce flow        |
-| Storage       | `teams/` + `tasks/`      | Unified `teams/`               |
-| Display       | tmux/iTerm2 split        | WebChat/UI                     |
-
-## Migration Notes
-
-For existing implementations following the original design:
-
-1. **Keep SQLite ledger** - No changes needed
-2. **Keep mailbox inbox** - Still required for peer-to-peer
-3. **Update teammate spawn** - Wrap `spawnSubagentDirect` instead of custom process
-4. **Add announce flow** - Integrate `runSubagentAnnounceFlow` for completions
-5. **Simplify storage** - Use unified `~/.openclaw/teams/` structure

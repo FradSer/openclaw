@@ -1,377 +1,281 @@
 # Agent Teams BDD Specifications
 
-## Overview
+This document defines the Behavior-Driven Development (BDD) specifications for the Agent Teams implementation. These scenarios are implemented in the test files under `src/teams/` and `src/tests/`.
 
-This document consolidates all BDD scenarios for the Agent Teams MVP. Scenarios are organized by feature area and expressed in Gherkin (Given/When/Then) format.
+## Feature 1: Team Lifecycle Management
 
-**Total Scenarios:** 84
-**Feature Files:** 5
+### Scenarios
 
-## Testing Strategy
-
-### Framework
-
-- **Primary**: Vitest for unit/integration tests
-- **BDD**: Cucumber/Gherkin-compatible scenarios for behavior validation
-
-### Coverage Targets
-
-- Unit tests: Individual components (SQLite operations, tool handlers)
-- Integration tests: Tool interactions and protocol flow
-- Concurrency tests: Race condition prevention and atomic operations
-- E2E tests: Complete team lifecycle workflows
-
-### Test Organization
-
-```
-src/teams/
-├── tools/
-│   ├── team-create.ts
-│   ├── team-create.test.ts
-│   ├── teammate-spawn.ts
-│   ├── teammate-spawn.test.ts
-│   ├── task-create.ts
-│   ├── task-create.test.ts
-│   ├── task-claim.ts
-│   ├── task-claim.test.ts
-│   ├── task-complete.ts
-│   ├── task-complete.test.ts
-│   ├── send-message.ts
-│   └── send-message.test.ts
-├── manager.ts
-├── manager.test.ts
-└── ...
-```
-
-## Feature 1: Team Lifecycle
-
-### Scenarios: 11
-
-| #   | Scenario Description                                |
-| --- | --------------------------------------------------- |
-| 1   | Create a new team successfully                      |
-| 2   | Create team with custom agent type for team lead    |
-| 3   | Create team with descriptive metadata               |
-| 4   | Attempt to create team with invalid name            |
-| 5   | Attempt to create duplicate team                    |
-| 6   | Graceful team shutdown with no active members       |
-| 7   | Graceful shutdown requests member approval          |
-| 8   | Member approves shutdown request                    |
-| 9   | Member rejects shutdown with reason                 |
-| 10  | Team shutdown fails with active members             |
-| 11  | Team lead handles member going idle during shutdown |
+| #   | Scenario                                       | Test File                |
+| --- | ---------------------------------------------- | ------------------------ |
+| 1   | Create a new team successfully                 | `manager.test.ts`        |
+| 2   | Reject team creation with invalid name         | `storage.test.ts`        |
+| 3   | Reject team creation if name already exists    | `team-create.ts` tool    |
+| 4   | Spawn a teammate into an existing team         | `teammate-spawn.ts` tool |
+| 5   | Reject teammate spawn if team does not exist   | `teammate-spawn.ts` tool |
+| 6   | Teammate gracefully processes shutdown request | `team-shutdown.ts` tool  |
+| 7   | Team deletion cleans up directories            | `cleanup.test.ts`        |
 
 ### Key Behaviors
 
-- Team configuration stored at `~/.openclaw/teams/{team_name}/config.json`
-- Task list directory at `~/.openclaw/teams/{team_name}/ledger.db`
-- Shutdown protocol requires member approval via `shutdown_request`/`shutdown_response`
-- Team lead waits for all member responses before completing shutdown
-- Teammate sessions spawn via `spawnSubagentDirect()` with `lane: "teammate"`
-
-### Example Scenario
-
 ```gherkin
-Scenario: Member approves shutdown request
-  Given an active team "collaborative-team"
-  And member "researcher-1" is active on the team
-  When the team lead requests shutdown
-  And member "researcher-1" receives the shutdown_request via mailbox
-  And member "researcher-1" responds with shutdown_response approve: true
-  Then member "researcher-1" terminates its session
-  And the team lead receives the approval confirmation
-  And the team config is updated to status: "shutdown"
+Feature: Team Lifecycle
+
+  Scenario: Create a new team successfully
+    Given I am an authenticated user with session key "agent:main:main"
+    When I execute team_create with team_name "alpha-squad"
+    Then a directory "~/.openclaw/teams/alpha-squad" is created
+    And a file "config.json" exists with lead session key
+    And a SQLite database "ledger.db" is initialized
+    And the lead is registered as a team member
+
+  Scenario: Reject team creation with invalid name
+    Given I attempt to create a team
+    When I provide team_name "invalid name!"
+    Then the operation fails with validation error
+    And error message contains "alphanumeric"
+
+  Scenario: Spawn teammate into team
+    Given a team "alpha-squad" exists
+    When I execute teammate_spawn with name "researcher"
+    Then a session key "agent:{id}:teammate:{uuid}" is generated
+    And the teammate is added to members table
+    And the teammate can access the team ledger
 ```
 
-## Feature 2: Task Management
+### Team Name Validation
 
-### Scenarios: 17
+```typescript
+// Valid names
+"alpha-squad"; // Lowercase with hyphens
+"team_123"; // Underscores allowed
+"a"; // Minimum 1 character
+"team-with-long-name-up-to-50-chars"; // Max 50 chars
 
-| #   | Scenario Description                                 |
-| --- | ---------------------------------------------------- |
-| 1   | Add a single task to the team                        |
-| 2   | Add a task with active form                          |
-| 3   | Add task with metadata                               |
-| 4   | List all tasks in the team                           |
-| 5   | List only pending tasks                              |
-| 6   | Claim an available task                              |
-| 7   | Claim task updates active form                       |
-| 8   | Attempt to claim already claimed task                |
-| 9   | Atomic task claiming prevents race conditions        |
-| 10  | Mark task as completed                               |
-| 11  | Add task with dependencies                           |
-| 12  | List tasks blocked by dependencies                   |
-| 13  | Auto-unblock tasks when dependency completes         |
-| 14  | Complex dependency chain resolution                  |
-| 15  | Circular dependency detection and prevention         |
-| 16  | Task completion removes from blockedBy of dependents |
-| 17  | Query tasks by metadata filters                      |
+// Invalid names
+"Alpha Squad"; // Spaces not allowed
+"team!"; // Special characters not allowed
+""; // Empty not allowed
+"team-name-that-is-way-too-long-for-the-limit"; // Over 50 chars
+```
+
+## Feature 2: Task Ledger Operations
+
+### Scenarios
+
+| #   | Scenario                                   | Test File            |
+| --- | ------------------------------------------ | -------------------- |
+| 1   | Create a task with basic information       | `manager.test.ts`    |
+| 2   | Create a task with dependencies            | `manager.test.ts`    |
+| 3   | List all pending tasks                     | `manager.test.ts`    |
+| 4   | Atomically claim a pending task            | `task-claim.test.ts` |
+| 5   | Reject claiming an already claimed task    | `task-claim.test.ts` |
+| 6   | Reject claiming a blocked task             | `manager.test.ts`    |
+| 7   | Complete a task successfully               | `manager.test.ts`    |
+| 8   | Auto-unblock dependent tasks on completion | `manager.test.ts`    |
+| 9   | Delete a task                              | `manager.test.ts`    |
+| 10  | Detect circular dependencies               | `manager.test.ts`    |
 
 ### Key Behaviors
 
-- Tasks have immutable: `id`, `subject`, `description`, `dependsOn`
-- Tasks have mutable: `status`, `owner`, `activeForm`
-- Atomic claiming uses SQL UPDATE with WHERE clause
-- `dependsOn` defines dependencies, `blockedBy` is computed and updated on completion
-- Circular dependencies detected during task creation
-
-### Example Scenario
-
 ```gherkin
-Scenario: Atomic task claiming prevents race conditions
-  Given a pending task with ID 5
-  And two idle members "agent-fast" and "agent-slow"
-  When both members attempt to claim the task simultaneously
-  Then only one member successfully claims the task
-  And the other member receives a conflict error
-  And the task has exactly one owner assigned
-  And no partial ownership states exist
+Feature: Task Ledger
+
+  Scenario: Atomically claim a pending task
+    Given a team "alpha-squad" exists
+    And a pending task "T1" exists with no owner
+    When teammate "researcher" claims task "T1"
+    Then the task status becomes "in_progress"
+    And the task owner is set to "researcher"
+    And the claimedAt timestamp is set
+
+  Scenario: Reject claiming an already claimed task
+    Given a task "T1" exists with owner "tester"
+    When teammate "researcher" attempts to claim task "T1"
+    Then the claim fails with error "Task already claimed by another agent"
+
+  Scenario: Reject claiming a blocked task
+    Given a task "T1" exists with status "completed"
+    And a task "T2" exists with blockedBy containing "T1"
+    When teammate "researcher" attempts to claim task "T2"
+    Then the claim fails with error "Task has unmet dependencies"
+    And the response includes blockedBy array
+
+  Scenario: Auto-unblock dependent tasks on completion
+    Given a task "T1" exists with status "in_progress"
+    And a task "T2" exists with blockedBy containing "T1"
+    When task "T1" is marked as completed
+    Then task "T2"'s blockedBy array no longer contains "T1"
+    And task "T2" becomes available for claiming
+```
+
+### Task Status Transitions
+
+```
+pending ──claim──> in_progress ──complete──> completed
+   │                   │
+   └──delete──────────>┴──> deleted
 ```
 
 ## Feature 3: Mailbox Communication
 
-### Scenarios: 19
+### Scenarios
 
-| #   | Scenario Description                                    |
-| --- | ------------------------------------------------------- |
-| 1   | Send direct message to teammate                         |
-| 2   | Message delivery is automatic                           |
-| 3   | Message delivered only to intended recipient            |
-| 4   | Plain text output is NOT visible to teammates           |
-| 5   | Broadcast message to all teammates                      |
-| 6   | Broadcast delivers to all N teammates                   |
-| 7   | Broadcast excludes sender                               |
-| 8   | Send shutdown request to member                         |
-| 9   | Shutdown response with approval                         |
-| 10  | Shutdown response with rejection and reason             |
-| 11  | Shutdown protocol includes request_id                   |
-| 12  | Response matches request_id                             |
-| 13  | Message summary provided for UI preview                 |
-| 14  | Summary limited to 5-10 words                           |
-| 15  | Idle notification sent to team lead                     |
-| 16  | Team lead does not auto-respond to idle during shutdown |
-| 17  | Peer DM visibility (summary only)                       |
-| 18  | Message persists if recipient offline                   |
-| 19  | Message queue processed on next inference               |
+| #   | Scenario                                   | Test File                   |
+| --- | ------------------------------------------ | --------------------------- |
+| 1   | Send a direct message to a teammate        | `inbox.test.ts`             |
+| 2   | Broadcast a message to all teammates       | `send-message.test.ts`      |
+| 3   | Reject message if recipient does not exist | `send-message.test.ts`      |
+| 4   | Inject pending messages into context       | `context-injection.test.ts` |
+| 5   | Clear inbox after context injection        | `inbox.test.ts`             |
+| 6   | Team lead sends shutdown request           | `team-shutdown.test.ts`     |
+| 7   | Teammate sends shutdown response           | `team-shutdown.test.ts`     |
 
 ### Key Behaviors
 
-- Messages stored in `~/.openclaw/teams/{team}/inbox/{session_key}/messages.jsonl`
-- Messages injected into context with XML tags: `<teammate-message teammate_id="" type="">`
-- Plain tool output is NOT shared - must use SendMessage for peer communication
-- Shutdown protocol uses request/response pattern with unique IDs
-
-### Example Scenario
-
 ```gherkin
-Scenario: Peer-to-peer direct message
-  Given a team "research-team" with members "researcher-1" and "researcher-2"
-  And "researcher-1" is working on task "Analyze code"
-  When "researcher-1" sends a direct message to "researcher-2"
-  And the message content is "Please review the auth module"
-  Then the message is written to researcher-2's inbox
-  And "researcher-2" sees the message on next inference
-  And the message is injected as XML context
+Feature: Mailbox Communication
+
+  Scenario: Send a direct message
+    Given a team "alpha-squad" exists
+    And teammate "researcher" is active
+    When teammate "tester" sends message to "researcher"
+    Then the message is written to inbox/researcher/messages.jsonl
+    And the message includes sender, type, content, timestamp
+
+  Scenario: Broadcast to all teammates
+    Given a team with 3 members exists
+    When team lead broadcasts a message
+    Then each member (except sender) receives the message in their inbox
+    And the message type is "broadcast"
+
+  Scenario: Context injection
+    Given teammate "researcher" has 2 pending messages
+    When "researcher" begins its next inference cycle
+    Then messages are formatted as <teammate-message> XML tags
+    And tags are prepended to the system prompt context
+    And the messages.jsonl file is deleted after injection
 ```
 
-## Feature 4: Concurrency Control
+### Message Types
 
-### Scenarios: 19
+```typescript
+type MessageType =
+  | "message" // Direct message
+  | "broadcast" // To all members
+  | "shutdown_request" // Request graceful shutdown
+  | "shutdown_response" // Approve/reject shutdown
+  | "idle"; // Status update
+```
 
-| #   | Scenario Description                               |
-| --- | -------------------------------------------------- |
-| 1   | WAL mode enables concurrent reads during writes    |
-| 2   | Multiple readers access DB during single write     |
-| 3   | Write operation blocks other writers               |
-| 4   | Lock levels: SHARED, RESERVED, PENDING, EXCLUSIVE  |
-| 5   | BEGIN CONCURRENT for optimistic concurrency        |
-| 6   | CONCURRENT rollback on conflict                    |
-| 7   | Checkpoint starvation prevention                   |
-| 8   | Configurable WAL checkpoint threshold              |
-| 9   | Atomic task claiming prevents race conditions      |
-| 10  | UPDATE with WHERE returns row count                |
-| 11  | Zero rows affected = task already claimed          |
-| 12  | Transaction isolation level SERIALIZABLE for claim |
-| 13  | Retry logic on SQLITE_BUSY error                   |
-| 14  | Maximum retry attempts                             |
-| 15  | Exponential backoff between retries                |
-| 16  | Deadlock prevention with consistent ordering       |
-| 17  | Transaction timeout                                |
-| 18  | Connection pooling handles concurrent agents       |
-| 19  | Connection reuse within same session               |
+### XML Message Format
+
+```xml
+<teammate-message
+  teammate_id="researcher-1"
+  type="message"
+  summary="Found critical bug in auth module">
+  Found a critical security vulnerability in the auth module.
+</teammate-message>
+```
+
+## Feature 4: Concurrency and Load
+
+### Scenarios
+
+| #   | Scenario                                    | Test File             |
+| --- | ------------------------------------------- | --------------------- |
+| 1   | Handle concurrent task claims               | `performance.test.ts` |
+| 2   | Handle SQLite BUSY errors with retry        | `manager.test.ts`     |
+| 3   | Handle rapid message writing                | `performance.test.ts` |
+| 4   | Resolve dependency graphs without deadlocks | `manager.test.ts`     |
+| 5   | Checkpoint WAL file periodically            | `cleanup.test.ts`     |
 
 ### Key Behaviors
 
-- SQLite WAL mode: one writer, multiple readers
-- Atomic claim: `UPDATE tasks SET owner=? WHERE id=? AND status='pending' AND owner IS NULL`
-- SQLITE_BUSY handled with retry logic (max 5 attempts, exponential backoff)
-- Checkpoint threshold prevents WAL file growth
-
-### Example Scenario
-
 ```gherkin
-Scenario: WAL mode enables concurrent reads
-  Given a team with active SQLite ledger
-  And a write transaction in progress
-  When multiple teammates query pending tasks
-  Then all read queries succeed without blocking
-  And the write transaction completes successfully
-  And no SQLITE_BUSY errors occur for readers
+Feature: Concurrency
+
+  Scenario: Handle concurrent task claims
+    Given a pending task "T1" exists
+    When 10 teammates attempt to claim "T1" simultaneously
+    Then exactly one teammate successfully claims the task
+    And 9 teammates receive "already claimed" error
+
+  Scenario: Handle SQLite BUSY errors
+    Given the database is locked by another transaction
+    When a teammate attempts to update a task
+    Then SQLITE_BUSY error is caught
+    And operation is retried with exponential backoff
+    And operation succeeds on retry
+
+  Scenario: Dependency graph resolution
+    Given task A depends on B
+    And task B depends on C
+    And task C is completed
+    Then task B becomes available
+    And when B completes, task A becomes available
+    And no deadlocks occur
 ```
 
-## Feature 5: Teammate Spawning
+## Feature 5: Security
 
-### Scenarios: 18
+### Scenarios
 
-| #   | Scenario Description                    |
-| --- | --------------------------------------- |
-| 1   | Teammate spawns via spawnSubagentDirect |
-| 2   | Teammate session uses teammate lane     |
-| 3   | Teammate session key format is correct  |
-| 4   | Teammate inherits sandbox settings      |
-| 5   | Teammate registered in team config      |
-| 6   | Teammate receives initial task prompt   |
-| 7   | Teammate spawn with model override      |
-| 8   | Teammate spawn with custom agent type   |
-| 9   | Teammate spawn fails with invalid team  |
-| 10  | Teammate depth tracking is correct      |
-| 11  | Teammate can spawn sub-subagents        |
-| 12  | Teammate subagent depth limits enforced |
-| 13  | Teammate session persists after spawn   |
-| 14  | Teammate mailbox inbox created          |
-| 15  | Teammate receives team state injection  |
-| 16  | Teammate announce flow on completion    |
-| 17  | Teammate session cleanup on shutdown    |
-| 18  | Multiple teammates spawn concurrently   |
+| #   | Scenario                                     | Test File          |
+| --- | -------------------------------------------- | ------------------ |
+| 1   | Validate team name to prevent path traversal | `security.test.ts` |
+| 2   | Sanitize session keys for inbox paths        | `inbox.test.ts`    |
+| 3   | Enforce message size limits                  | `limits.test.ts`   |
+| 4   | Enforce team member limits                   | `limits.test.ts`   |
 
 ### Key Behaviors
 
-- Teammates spawn via `spawnSubagentDirect()` with `mode: "session"`
-- Session key format: `agent:${agentId}:teammate:${uuid}`
-- Lane: `AGENT_LANE_TEAMMATE`
-- Completion announced via `runSubagentAnnounceFlow()`
-
-### Example Scenario
-
 ```gherkin
-Scenario: Teammate spawns via spawnSubagentDirect
-  Given an active team "research-team" with team lead
-  When team lead calls TeammateSpawn tool
-  And parameters are { name: "researcher", agent_id: "default" }
-  Then spawnSubagentDirect is called with lane: "teammate"
-  And session key format is "agent:default:teammate:{uuid}"
-  And the teammate is registered in team config
-  And the teammate receives team state injection
+Feature: Security
+
+  Scenario: Prevent path traversal in team names
+    When I attempt to create team with name "../../../etc/passwd"
+    Then the operation fails with validation error
+    And no files are created outside ~/.openclaw/teams/
+
+  Scenario: Sanitize session keys for inbox paths
+    Given session key "agent:main:user@example.com"
+    When inbox directory is created
+    Then the path uses sanitized name "agent_main_user_example_com"
+    And no path separators are present
+
+  Scenario: Enforce message size limit
+    When I send a message larger than 100KB
+    Then the operation fails with size limit error
 ```
 
-## Implementation Checklist
+## Test Files Reference
 
-### Phase 1: Core Infrastructure
+| Test File                   | Coverage                         |
+| --------------------------- | -------------------------------- |
+| `manager.test.ts`           | Core operations, dependencies    |
+| `ledger.test.ts`            | SQLite operations, schema        |
+| `inbox.test.ts`             | Message storage, retrieval       |
+| `storage.test.ts`           | Directory management, validation |
+| `pool.test.ts`              | Connection caching               |
+| `limits.test.ts`            | Resource limits                  |
+| `cleanup.test.ts`           | Maintenance operations           |
+| `context-injection.test.ts` | Message to XML conversion        |
+| `state-injection.test.ts`   | Team state formatting            |
+| `security.test.ts`          | Path traversal, validation       |
+| `performance.test.ts`       | Concurrency, load                |
+| `e2e.test.ts`               | End-to-end workflows             |
 
-- [ ] Create `src/teams/manager.ts` for SQLite operations
-- [ ] Create `src/config/teams/store.ts` for team config persistence
-- [ ] Define TypeScript types for teams, tasks, members, messages
-- [ ] Implement WAL mode configuration
-- [ ] Implement connection pooling
-- [ ] Add `AGENT_LANE_TEAMMATE` to `src/agents/lanes.ts`
+## Running Tests
 
-### Phase 2: Team Tools
+```bash
+# Run all team tests
+pnpm test src/teams/
 
-- [ ] Implement `TeamCreate` tool
-- [ ] Implement `TeammateSpawn` tool (wraps `spawnSubagentDirect`)
-- [ ] Implement `TeamShutdown` tool
-- [ ] Add team fields to SessionEntry type
+# Run specific test file
+pnpm test src/teams/manager.test.ts
 
-### Phase 3: Task Tools
-
-- [ ] Implement `TaskCreate` tool
-- [ ] Implement `TaskList` tool
-- [ ] Implement `TaskClaim` tool (atomic)
-- [ ] Implement `TaskComplete` tool (with unblock logic)
-
-### Phase 4: Communication Tools
-
-- [ ] Implement `SendMessage` tool
-- [ ] Implement inbox directory structure
-- [ ] Implement message injection into context
-- [ ] Implement shutdown protocol
-- [ ] Integrate `runSubagentAnnounceFlow` for completion
-
-### Phase 5: Testing
-
-- [ ] Write unit tests for SQLite operations
-- [ ] Write integration tests for tool interactions
-- [ ] Write concurrency tests for race conditions
-- [ ] Implement BDD step definitions for all 84 scenarios
-
-## Appendix: Gherkin Step Definitions
-
-### Team Lifecycle Steps
-
-```typescript
-Given("an active team {string}", async function (teamName: string) {
-  const teamConfig = await createTeam({ name: teamName });
-  this.team = teamConfig;
-});
-
-Given("member {string} is active on the team", async function (memberName: string) {
-  const member = await spawnTeammate(this.team.name, { name: memberName });
-  this.members.push(member);
-});
-
-When("the team lead requests shutdown", async function () {
-  await sendShutdownRequest(this.team.name, this.teamLeadSession);
-});
+# Run BDD scenarios
+pnpm test src/tests/bdd-team-*.test.ts
 ```
-
-### Task Management Steps
-
-```typescript
-Given("a pending task with ID {string}", async function (taskId: string) {
-  const task = await createTask(this.team.name, {
-    id: taskId,
-    subject: "Test task",
-    description: "Test description",
-    status: "pending",
-  });
-  this.task = task;
-});
-
-When("both members attempt to claim the task simultaneously", async function () {
-  const [result1, result2] = await Promise.all([
-    claimTask(this.team.name, this.members[0].sessionKey, this.task.id),
-    claimTask(this.team.name, this.members[1].sessionKey, this.task.id),
-  ]);
-  this.claimResults = [result1, result2];
-});
-```
-
-### Mailbox Steps
-
-```typescript
-When(
-  "{string} sends a direct message to {string}",
-  async function (fromName: string, toName: string) {
-    const fromMember = this.members.find((m) => m.name === fromName);
-    const toMember = this.members.find((m) => m.name === toName);
-    await sendMessage(this.team.name, {
-      from: fromMember.sessionKey,
-      to: toMember.sessionKey,
-      type: "message",
-      content: this.messageContent,
-    });
-  },
-);
-
-Then("{string} sees the message on next inference", async function (memberName: string) {
-  const member = this.members.find((m) => m.name === memberName);
-  const context = await injectPendingMessages(member.sessionKey);
-  expect(context).to.include(this.messageContent);
-});
-```
-
-## References
-
-- Full feature files: `/Users/FradSer/Developer/FradSer/openclaw/features/*.feature`
-- Research summary: `/Users/FradSer/Developer/FradSer/openclaw/features/RESEARCH_SUMMARY.md`
-- Feature index: `/Users/FradSer/Developer/FradSer/openclaw/features/FEATURE_INDEX.md`

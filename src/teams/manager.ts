@@ -223,6 +223,33 @@ export class TeamManager {
   }
 
   /**
+   * Find available tasks that can be claimed
+   * Returns tasks that are: pending status, not claimed, no unmet dependencies
+   */
+  findAvailableTask(limit = 10): TaskWithComputed[] {
+    this.ensureOpen();
+    const db = this.ledger.getDb();
+
+    const rows = db
+      .prepare(
+        `
+      SELECT
+        id, subject, description, activeForm, status, owner,
+        dependsOn, blockedBy, metadata, createdAt, claimedAt, completedAt
+      FROM tasks
+      WHERE status = 'pending'
+        AND (owner IS NULL OR owner = '')
+        AND (blockedBy IS NULL OR blockedBy = '[]' OR blockedBy = '')
+      ORDER BY createdAt ASC
+      LIMIT ?
+    `,
+      )
+      .all(limit) as TaskRow[];
+
+    return rows.map((row) => this.taskFromRow(row));
+  }
+
+  /**
    * Claim a task for an agent
    */
   claimTask(taskId: string, agentName: string): TaskClaimResultInternal {

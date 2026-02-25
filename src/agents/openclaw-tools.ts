@@ -20,9 +20,11 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createSendMessageTool } from "./tools/teams/send-message.js";
+import { createTaskAutoClaimTool } from "./tools/teams/task-auto-claim.js";
 import { createTaskClaimTool } from "./tools/teams/task-claim.js";
 import { createTaskCompleteTool } from "./tools/teams/task-complete.js";
 import { createTaskCreateTool } from "./tools/teams/task-create.js";
+import { createTaskFindAvailableTool } from "./tools/teams/task-find-available.js";
 import { createTaskListTool } from "./tools/teams/task-list.js";
 import { createTeamCreateTool } from "./tools/teams/team-create.js";
 import { createTeamShutdownTool } from "./tools/teams/team-shutdown.js";
@@ -199,6 +201,12 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
     }),
     createTaskClaimTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createTaskFindAvailableTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createTaskAutoClaimTool({
       agentSessionKey: options?.agentSessionKey,
     }),
     createTaskCompleteTool({
