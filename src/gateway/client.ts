@@ -11,7 +11,11 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { clearDevicePairing } from "../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  clearDevicePairing,
+  listDevicePairing,
+} from "../infra/device-pairing.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
@@ -45,7 +49,6 @@ export type GatewayClientOptions = {
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
   token?: string;
-  deviceToken?: string;
   password?: string;
   instanceId?: string;
   clientName?: GatewayClientName;
@@ -61,6 +64,7 @@ export type GatewayClientOptions = {
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   deviceIdentity?: DeviceIdentity;
+  allowStoredDeviceToken?: boolean;
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
@@ -104,10 +108,60 @@ export class GatewayClient {
     };
   }
 
+  private async approveLocalRepairRequestBeforeConnect(): Promise<void> {
+    // Only attempt for local loopback connections (no remote URL override)
+    const url = this.opts.url ?? "ws://127.0.0.1:18789";
+    if (url !== "ws://127.0.0.1:18789" && url !== "wss://127.0.0.1:18789") {
+      return;
+    }
+    // Only for operator role
+    const role = this.opts.role ?? "operator";
+    if (role !== "operator") {
+      return;
+    }
+    // Only when using device identity (shared auth is not enabled)
+    if (!this.opts.deviceIdentity || this.opts.token || this.opts.password) {
+      return;
+    }
+    const deviceId = this.opts.deviceIdentity.deviceId;
+    const now = Date.now();
+    const pairing = await listDevicePairing();
+    for (const request of pairing.pending) {
+      // Check isRepair flag
+      if (request.isRepair !== true) {
+        continue;
+      }
+      // Check deviceId match
+      if (request.deviceId !== deviceId) {
+        continue;
+      }
+      // Check role is operator
+      if (request.role !== role) {
+        continue;
+      }
+      // Check timestamp within window (120s)
+      const ageMs = now - request.ts;
+      if (ageMs > 120_000) {
+        continue;
+      }
+      // Auto-approve the repair request
+      try {
+        await approveDevicePairing(request.requestId);
+        logDebug(`auto-approved device repair request ${request.requestId} for ${deviceId}`);
+      } catch (err) {
+        logDebug(
+          `failed to auto-approve device repair request ${request.requestId}: ${String(err)}`,
+        );
+      }
+    }
+  }
+
   start() {
     if (this.closed) {
       return;
     }
+    // Fire-and-forget pre-connection repair approval
+    void this.approveLocalRepairRequestBeforeConnect();
     const url = this.opts.url ?? "ws://127.0.0.1:18789";
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
       this.opts.onConnectError?.(new Error("gateway tls fingerprint requires wss:// gateway url"));
@@ -180,14 +234,10 @@ export class GatewayClient {
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       this.ws = null;
-      // Clear persisted device auth state only when device-token auth was active.
-      // Shared token/password failures can return the same close reason but should
-      // not erase a valid cached device token.
+      // If closed due to device token mismatch, clear the stored token and pairing so next attempt can get a fresh one
       if (
         code === 1008 &&
         reasonText.toLowerCase().includes("device token mismatch") &&
-        !this.opts.token &&
-        !this.opts.password &&
         this.opts.deviceIdentity
       ) {
         const deviceId = this.opts.deviceIdentity.deviceId;
@@ -243,25 +293,18 @@ export class GatewayClient {
       this.connectTimer = null;
     }
     const role = this.opts.role ?? "operator";
-    const explicitGatewayToken = this.opts.token?.trim() || undefined;
-    const explicitDeviceToken = this.opts.deviceToken?.trim() || undefined;
-    const storedToken = this.opts.deviceIdentity
-      ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
-      : null;
-    // Keep shared gateway credentials explicit. Persisted per-device tokens only
-    // participate when no explicit shared token is provided.
-    const resolvedDeviceToken =
-      explicitDeviceToken ?? (!explicitGatewayToken ? (storedToken ?? undefined) : undefined);
-    // Legacy compatibility: keep `auth.token` populated for device-token auth when
-    // no explicit shared token is present.
-    const authToken = explicitGatewayToken ?? resolvedDeviceToken;
-    const authPassword = this.opts.password?.trim() || undefined;
+    const storedToken =
+      this.opts.allowStoredDeviceToken !== false && this.opts.deviceIdentity
+        ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
+        : null;
+    // Prefer explicitly provided credentials (e.g. CLI `--token`) over any persisted
+    // device-auth tokens. Persisted tokens are only used when no token is provided.
+    const authToken = this.opts.token ?? storedToken ?? undefined;
     const auth =
-      authToken || authPassword || resolvedDeviceToken
+      authToken || this.opts.password
         ? {
             token: authToken,
-            deviceToken: resolvedDeviceToken,
-            password: authPassword,
+            password: this.opts.password,
           }
         : undefined;
     const signedAtMs = Date.now();

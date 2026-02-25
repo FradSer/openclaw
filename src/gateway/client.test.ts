@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { generateKeyPairSync } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 
@@ -7,6 +8,8 @@ const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const clearDevicePairingMock = vi.hoisted(() => vi.fn());
+const listDevicePairingMock = vi.hoisted(() => vi.fn());
+const approveDevicePairingMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
 
 type WsEvent = "open" | "message" | "close" | "error";
@@ -22,7 +25,9 @@ class MockWebSocket {
   private messageHandlers: WsEventHandlers["message"][] = [];
   private closeHandlers: WsEventHandlers["close"][] = [];
   private errorHandlers: WsEventHandlers["error"][] = [];
-  readonly sent: string[] = [];
+  readyState = MockWebSocket.OPEN;
+  sent: string[] = [];
+  static OPEN = 1;
 
   constructor(_url: string, _options?: unknown) {
     wsInstances.push(this);
@@ -53,8 +58,8 @@ class MockWebSocket {
 
   close(_code?: number, _reason?: string): void {}
 
-  send(data: string): void {
-    this.sent.push(data);
+  send(payload: string): void {
+    this.sent.push(payload);
   }
 
   emitOpen(): void {
@@ -94,7 +99,9 @@ vi.mock("../infra/device-pairing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/device-pairing.js")>();
   return {
     ...actual,
+    listDevicePairing: (...args: unknown[]) => listDevicePairingMock(...args),
     clearDevicePairing: (...args: unknown[]) => clearDevicePairingMock(...args),
+    approveDevicePairing: (...args: unknown[]) => approveDevicePairingMock(...args),
   };
 });
 
@@ -119,38 +126,27 @@ function getLatestWs(): MockWebSocket {
 function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
+  opts?: { allowStoredDeviceToken?: boolean; token?: string },
 ) {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const identity: DeviceIdentity = {
     deviceId,
-    privateKeyPem: "private-key",
-    publicKeyPem: "public-key",
+    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
   };
   return new GatewayClient({
     url: "ws://127.0.0.1:18789",
     deviceIdentity: identity,
+    allowStoredDeviceToken: opts?.allowStoredDeviceToken,
+    token: opts?.token,
     onClose,
   });
-}
-
-function expectSecurityConnectError(
-  onConnectError: ReturnType<typeof vi.fn>,
-  params?: { expectTailscaleHint?: boolean },
-) {
-  expect(onConnectError).toHaveBeenCalledWith(
-    expect.objectContaining({
-      message: expect.stringContaining("SECURITY ERROR"),
-    }),
-  );
-  const error = onConnectError.mock.calls[0]?.[0] as Error;
-  expect(error.message).toContain("openclaw doctor --fix");
-  if (params?.expectTailscaleHint) {
-    expect(error.message).toContain("Tailscale Serve/Funnel");
-  }
 }
 
 describe("GatewayClient security checks", () => {
   beforeEach(() => {
     wsInstances.length = 0;
+    listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
@@ -162,7 +158,14 @@ describe("GatewayClient security checks", () => {
 
     client.start();
 
-    expectSecurityConnectError(onConnectError, { expectTailscaleHint: true });
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("SECURITY ERROR"),
+      }),
+    );
+    const error = onConnectError.mock.calls[0]?.[0] as Error;
+    expect(error.message).toContain("openclaw doctor --fix");
+    expect(error.message).toContain("Tailscale Serve/Funnel");
     expect(wsInstances.length).toBe(0); // No WebSocket created
     client.stop();
   });
@@ -177,7 +180,13 @@ describe("GatewayClient security checks", () => {
     // Should not throw
     expect(() => client.start()).not.toThrow();
 
-    expectSecurityConnectError(onConnectError);
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("SECURITY ERROR"),
+      }),
+    );
+    const error = onConnectError.mock.calls[0]?.[0] as Error;
+    expect(error.message).toContain("openclaw doctor --fix");
     expect(wsInstances.length).toBe(0); // No WebSocket created
     client.stop();
   });
@@ -214,6 +223,11 @@ describe("GatewayClient security checks", () => {
 describe("GatewayClient close handling", () => {
   beforeEach(() => {
     wsInstances.length = 0;
+    loadDeviceAuthTokenMock.mockClear();
+    loadDeviceAuthTokenMock.mockReturnValue(undefined);
+    storeDeviceAuthTokenMock.mockClear();
+    storeDeviceAuthTokenMock.mockImplementation(() => undefined);
+    listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
     clearDeviceAuthTokenMock.mockClear();
     clearDeviceAuthTokenMock.mockImplementation(() => undefined);
     clearDevicePairingMock.mockClear();
@@ -291,117 +305,264 @@ describe("GatewayClient close handling", () => {
     client.stop();
   });
 
-  it("does not clear persisted device auth when explicit shared token is provided", () => {
-    const onClose = vi.fn();
-    const identity: DeviceIdentity = {
-      deviceId: "dev-5",
-      privateKeyPem: "private-key",
-      publicKeyPem: "public-key",
-    };
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-      deviceIdentity: identity,
-      token: "shared-token",
-      onClose,
+  it("does not load persisted device token when allowStoredDeviceToken is false", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-token" });
+    const client = createClientWithIdentity("dev-5", vi.fn(), {
+      allowStoredDeviceToken: false,
     });
 
     client.start();
-    getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
-
-    expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
-    expect(clearDevicePairingMock).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
-    client.stop();
-  });
-});
-
-describe("GatewayClient connect auth payload", () => {
-  beforeEach(() => {
-    wsInstances.length = 0;
-    loadDeviceAuthTokenMock.mockReset();
-    storeDeviceAuthTokenMock.mockReset();
-  });
-
-  function connectFrameFrom(ws: MockWebSocket) {
-    const raw = ws.sent.find((frame) => frame.includes('"method":"connect"'));
-    if (!raw) {
-      throw new Error("missing connect frame");
-    }
-    const parsed = JSON.parse(raw) as {
-      params?: {
-        auth?: {
-          token?: string;
-          deviceToken?: string;
-          password?: string;
-        };
-      };
-    };
-    return parsed.params?.auth ?? {};
-  }
-
-  function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {
+    const ws = getLatestWs();
+    ws.emitOpen();
     ws.emitMessage(
       JSON.stringify({
         type: "event",
         event: "connect.challenge",
-        payload: { nonce },
+        payload: { nonce: "nonce-1" },
       }),
     );
-  }
 
-  it("uses explicit shared token and does not inject stored device token", () => {
-    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-      token: "shared-token",
-    });
-
-    client.start();
-    const ws = getLatestWs();
-    ws.emitOpen();
-    emitConnectChallenge(ws);
-
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "shared-token",
-    });
-    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    const req = ws.sent
+      .map((raw) => JSON.parse(raw) as { method?: string; params?: { auth?: { token?: string } } })
+      .find((frame) => frame.method === "connect");
+    expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
+    expect(req?.params?.auth).toBeUndefined();
     client.stop();
   });
 
-  it("uses stored device token when shared token is not provided", () => {
-    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+  it("still sends signed device payload when device identity is present", () => {
+    const client = createClientWithIdentity("dev-6", vi.fn(), {
+      token: "explicit-token",
     });
 
     client.start();
     const ws = getLatestWs();
     ws.emitOpen();
-    emitConnectChallenge(ws);
+    ws.emitMessage(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "nonce-2" },
+      }),
+    );
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "stored-device-token",
-      deviceToken: "stored-device-token",
+    const req = ws.sent
+      .map(
+        (raw) =>
+          JSON.parse(raw) as {
+            method?: string;
+            params?: { device?: { id?: string; signature?: string; nonce?: string } };
+          },
+      )
+      .find((frame) => frame.method === "connect");
+    expect(req?.params?.device?.id).toBe("dev-6");
+    expect(typeof req?.params?.device?.signature).toBe("string");
+    expect(req?.params?.device?.nonce).toBe("nonce-2");
+    client.stop();
+  });
+});
+
+describe("GatewayClient pre-connection repair approval", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+    clearDeviceAuthTokenMock.mockClear();
+    loadDeviceAuthTokenMock.mockClear();
+    storeDeviceAuthTokenMock.mockClear();
+    clearDevicePairingMock.mockClear();
+    listDevicePairingMock.mockClear();
+    approveDevicePairingMock.mockClear();
+    logDebugMock.mockClear();
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+    listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
+    approveDevicePairingMock.mockResolvedValue(null);
+  });
+
+  it("approves repair request for local loopback with operator role", async () => {
+    const deviceId = "dev-7";
+    const now = Date.now();
+    listDevicePairingMock.mockResolvedValue({
+      pending: [
+        {
+          requestId: "req-repair",
+          deviceId,
+          role: "operator",
+          isRepair: true,
+          ts: now - 10_000,
+          publicKey: "test-key",
+        },
+      ],
+      paired: [],
     });
+    approveDevicePairingMock.mockResolvedValue({
+      requestId: "req-repair",
+      device: { deviceId },
+    });
+
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      role: "operator",
+      deviceIdentity: { deviceId, publicKeyPem: "", privateKeyPem: "" },
+    });
+    client.start();
+
+    // Wait for async approval to complete
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+    expect(approveDevicePairingMock).toHaveBeenCalledWith("req-repair");
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("auto-approved device repair request"),
+    );
     client.stop();
   });
 
-  it("prefers explicit deviceToken over stored device token", () => {
-    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+  it("does not approve for non-loopback URLs", async () => {
+    listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
+    approveDevicePairingMock.mockResolvedValue(null);
+
+    const client = new GatewayClient({
+      url: "wss://remote.example.com/ws",
+      role: "operator",
+      deviceIdentity: { deviceId: "dev-8", publicKeyPem: "", privateKeyPem: "" },
+    });
+    client.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(listDevicePairingMock).not.toHaveBeenCalled();
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("does not approve for non-operator role", async () => {
+    listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
+    approveDevicePairingMock.mockResolvedValue(null);
+
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
-      deviceToken: "explicit-device-token",
+      role: "viewer",
+      deviceIdentity: { deviceId: "dev-9", publicKeyPem: "", privateKeyPem: "" },
     });
-
     client.start();
-    const ws = getLatestWs();
-    ws.emitOpen();
-    emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "explicit-device-token",
-      deviceToken: "explicit-device-token",
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(listDevicePairingMock).not.toHaveBeenCalled();
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("does not approve when token is provided", async () => {
+    listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
+    approveDevicePairingMock.mockResolvedValue(null);
+
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      role: "operator",
+      token: "explicit-token",
+      deviceIdentity: { deviceId: "dev-10", publicKeyPem: "", privateKeyPem: "" },
     });
+    client.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(listDevicePairingMock).not.toHaveBeenCalled();
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("skips repair request with isRepair=false", async () => {
+    const deviceId = "dev-11";
+    const now = Date.now();
+    listDevicePairingMock.mockResolvedValue({
+      pending: [
+        {
+          requestId: "req-initial",
+          deviceId,
+          role: "operator",
+          isRepair: false,
+          ts: now - 10_000,
+          publicKey: "test-key",
+        },
+      ],
+      paired: [],
+    });
+    approveDevicePairingMock.mockResolvedValue(null);
+
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      role: "operator",
+      deviceIdentity: { deviceId, publicKeyPem: "", privateKeyPem: "" },
+    });
+    client.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("skips repair request with wrong deviceId", async () => {
+    const now = Date.now();
+    listDevicePairingMock.mockResolvedValue({
+      pending: [
+        {
+          requestId: "req-other",
+          deviceId: "other-device",
+          role: "operator",
+          isRepair: true,
+          ts: now - 10_000,
+          publicKey: "test-key",
+        },
+      ],
+      paired: [],
+    });
+    approveDevicePairingMock.mockResolvedValue(null);
+
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      role: "operator",
+      deviceIdentity: { deviceId: "dev-12", publicKeyPem: "", privateKeyPem: "" },
+    });
+    client.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("skips repair request older than 120s", async () => {
+    const deviceId = "dev-13";
+    const now = Date.now();
+    listDevicePairingMock.mockResolvedValue({
+      pending: [
+        {
+          requestId: "req-old",
+          deviceId,
+          role: "operator",
+          isRepair: true,
+          ts: now - 200_000,
+          publicKey: "test-key",
+        },
+      ],
+      paired: [],
+    });
+    approveDevicePairingMock.mockResolvedValue(null);
+
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      role: "operator",
+      deviceIdentity: { deviceId, publicKeyPem: "", privateKeyPem: "" },
+    });
+    client.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
     client.stop();
   });
 });

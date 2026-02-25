@@ -361,9 +361,25 @@ Conditions for config fallback:
 
 ### Layer 2: Auto-repair pairing approval for local loopback
 
-Session tools may encounter `pairing required` (WS close 1008) when connecting to the gateway. For Agent Teams running on loopback, repair pairings are now auto-approved:
+#### Pre-connection repair approval (teammate startup)
 
-**Auto-approve conditions** (all must be true):
+When spawning a teammate, the gateway client checks for pending repair requests **before** establishing the WebSocket connection. This handles scope upgrade scenarios (e.g., `operator.read` → `operator.admin`) where the device is already paired but needs elevated scopes.
+
+**Pre-connection auto-approve conditions** (all must be true):
+
+- Target URL is local loopback (`ws://127.0.0.1:18789` or `wss://127.0.0.1:18789`)
+- Client role is `operator`
+- Using device identity (no explicit token/password provided)
+- Pending request has `isRepair === true`
+- Pending request `deviceId` matches local device
+- Pending request `role === "operator"`
+- Pending request `ts` within 120,000ms of now
+
+#### Post-connection repair approval (session tools)
+
+Session tools (`sessions_list`, `sessions_history`, `sessions_send`) use a wrapper that catches `pairing required` errors (WS close 1008) after connection and auto-approves repair requests with the same conditions.
+
+**Post-connection auto-approve conditions** (all must be true):
 
 - Local loopback mode (no remote URL, no URL override)
 - Pending request has `isRepair === true`
