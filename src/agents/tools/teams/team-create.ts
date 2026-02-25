@@ -1,10 +1,12 @@
 /**
  * TeamCreate Tool
  * Creates a new team with configuration, directory structure, and SQLite ledger
+ * Checks agentToAgent policy configuration for team communication
  */
 
 import { randomUUID } from "node:crypto";
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../../../config/config.js";
 import { getTeamManager } from "../../../teams/pool.js";
 import {
   createTeamDirectory,
@@ -14,6 +16,7 @@ import {
 } from "../../../teams/storage.js";
 import type { AnyAgentTool } from "../common.js";
 import { jsonResult, readStringParam } from "../common.js";
+import { createAgentToAgentPolicy } from "../sessions-access.js";
 
 const TeamCreateSchema = Type.Object({
   team_name: Type.String({ minLength: 1, maxLength: 50 }),
@@ -37,6 +40,21 @@ export function createTeamCreateTool(opts?: { agentSessionKey?: string }): AnyAg
 
       // Validate team name format
       validateTeamNameOrThrow(teamName);
+
+      // Check agentToAgent policy configuration
+      const cfg = loadConfig();
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const warnings: string[] = [];
+
+      if (!a2aPolicy.enabled) {
+        warnings.push(
+          "WARNING: tools.agentToAgent is not enabled. Team communication will be restricted to same-agent messages only. Set tools.agentToAgent.enabled=true for full team communication.",
+        );
+      } else if (!a2aPolicy.matchesAllow("*")) {
+        warnings.push(
+          "NOTE: tools.agentToAgent.allow does not include '*'. Some cross-agent team communication may be restricted.",
+        );
+      }
 
       // Check for duplicate team
       const teamsDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
@@ -80,11 +98,18 @@ export function createTeamCreateTool(opts?: { agentSessionKey?: string }): AnyAg
         status: "idle",
       });
 
+      // Build response message
+      let message = `Team '${teamName}' created successfully with ID ${teamId}`;
+      if (warnings.length > 0) {
+        message += `\n\n${warnings.join("\n\n")}`;
+      }
+
       return jsonResult({
         teamId,
         teamName,
         status: "active",
-        message: `Team '${teamName}' created successfully with ID ${teamId}`,
+        message,
+        warnings: warnings.length > 0 ? warnings : undefined,
       });
     },
   };

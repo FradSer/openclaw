@@ -1,15 +1,19 @@
 /**
  * SendMessage Tool
  * Sends messages between team members via inbox directories
+ * Enforces agentToAgent policy for cross-agent communication
  */
 
 import { randomUUID } from "node:crypto";
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../../../config/config.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { writeInboxMessage, listMembers } from "../../../teams/inbox.js";
 import { validateTeamNameOrThrow } from "../../../teams/storage.js";
 import type { TeamMessage } from "../../../teams/types.js";
 import type { AnyAgentTool } from "../common.js";
 import { jsonResult, readStringParam } from "../common.js";
+import { createAgentToAgentPolicy, type AgentToAgentPolicy } from "../sessions-access.js";
 
 const SendMessageSchema = Type.Object({
   team_name: Type.String({ minLength: 1, maxLength: 50 }),
@@ -33,6 +37,48 @@ function summarizeMessage(content: string, maxWords = 10): string {
     return content;
   }
   return words.slice(0, maxWords).join(" ") + "...";
+}
+
+/**
+ * Check if agentToAgent policy allows communication between sender and recipient
+ * Returns { allowed: true } if communication is permitted, or error message if not
+ */
+function checkAgentToAgentPolicy(params: {
+  a2aPolicy: AgentToAgentPolicy;
+  senderSessionKey: string | undefined;
+  recipientSessionKey: string;
+}): { allowed: boolean; error?: string } {
+  const { a2aPolicy, senderSessionKey, recipientSessionKey } = params;
+
+  // Resolve agent IDs from session keys
+  const senderAgentId = senderSessionKey
+    ? resolveAgentIdFromSessionKey(senderSessionKey)
+    : "unknown";
+  const recipientAgentId = resolveAgentIdFromSessionKey(recipientSessionKey);
+
+  // Same agent communication is always allowed (lead <-> teammate within same agent)
+  if (senderAgentId === recipientAgentId) {
+    return { allowed: true };
+  }
+
+  // Cross-agent communication requires agentToAgent to be enabled
+  if (!a2aPolicy.enabled) {
+    return {
+      allowed: false,
+      error:
+        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+    };
+  }
+
+  // Check if policy allows this communication
+  if (!a2aPolicy.isAllowed(senderAgentId, recipientAgentId)) {
+    return {
+      allowed: false,
+      error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
+    };
+  }
+
+  return { allowed: true };
 }
 
 export function createSendMessageTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
@@ -69,6 +115,11 @@ export function createSendMessageTool(opts?: { agentSessionKey?: string }): AnyA
         });
       }
 
+      // Load config and create agentToAgent policy
+      const cfg = loadConfig();
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const senderSessionKey = opts?.agentSessionKey;
+
       // Get team directory
       const teamsDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
 
@@ -79,7 +130,7 @@ export function createSendMessageTool(opts?: { agentSessionKey?: string }): AnyA
       const message: TeamMessage = {
         id: messageId,
         type,
-        from: opts?.agentSessionKey || "unknown",
+        from: senderSessionKey || "unknown",
         content,
         summary,
         requestId,
@@ -90,24 +141,79 @@ export function createSendMessageTool(opts?: { agentSessionKey?: string }): AnyA
 
       // Write message to inbox
       if (type === "broadcast") {
-        // Send to all members except sender
+        // Send to all members except sender, filtered by policy
         const members = await listMembers(teamName, teamsDir);
+        let deliveredCount = 0;
+        const policyDeniedRecipients: string[] = [];
+
         for (const member of members) {
           const memberSessionKey =
             (member as { sessionKey?: string; name?: string }).sessionKey ??
             (member as { name: string }).name;
-          if (memberSessionKey !== opts?.agentSessionKey) {
-            const broadcastMessage = { ...message, to: memberSessionKey };
-            await writeInboxMessage(
-              teamName,
-              teamsDir,
-              memberSessionKey,
-              broadcastMessage as Record<string, unknown>,
-            );
+
+          // Skip sender
+          if (memberSessionKey === senderSessionKey) {
+            continue;
           }
+
+          // Check agentToAgent policy
+          const policyCheck = checkAgentToAgentPolicy({
+            a2aPolicy,
+            senderSessionKey,
+            recipientSessionKey: memberSessionKey,
+          });
+
+          if (!policyCheck.allowed) {
+            policyDeniedRecipients.push(memberSessionKey);
+            continue;
+          }
+
+          const broadcastMessage = { ...message, to: memberSessionKey };
+          await writeInboxMessage(
+            teamName,
+            teamsDir,
+            memberSessionKey,
+            broadcastMessage as Record<string, unknown>,
+          );
+          deliveredCount++;
         }
+
+        // If all recipients were denied by policy, return error
+        if (deliveredCount === 0 && policyDeniedRecipients.length > 0) {
+          return jsonResult({
+            messageId,
+            type,
+            delivered: false,
+            error: `Agent-to-agent messaging denied by tools.agentToAgent policy for all recipients.`,
+            deniedRecipients: policyDeniedRecipients,
+          });
+        }
+
+        return jsonResult({
+          messageId,
+          type,
+          delivered: true,
+          deliveredCount,
+          deniedCount: policyDeniedRecipients.length,
+        });
       } else {
-        // Direct message to recipient
+        // Direct message to recipient - check policy first
+        const policyCheck = checkAgentToAgentPolicy({
+          a2aPolicy,
+          senderSessionKey,
+          recipientSessionKey: recipient!,
+        });
+
+        if (!policyCheck.allowed) {
+          return jsonResult({
+            messageId,
+            type,
+            delivered: false,
+            error: policyCheck.error,
+          });
+        }
+
+        // Write message to recipient's inbox
         message.to = recipient;
         await writeInboxMessage(
           teamName,

@@ -98,15 +98,25 @@ await callGateway({
 
 ### 3. Use sessions_send for Communication
 
-Team messaging should leverage `agentToAgent` policy:
+Team messaging should leverage `agentToAgent` policy. The `send_message` tool enforces this policy:
 
 ```typescript
-// Message delivery via Gateway (respects agentToAgent policy)
-await sessions_send({
-  to: teammateSessionKey,
-  message: content,
+// send_message checks agentToAgent policy before delivery
+// If policy is disabled or denies communication, returns error:
+// "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true"
+
+// Same-agent communication (lead ↔ teammate) is always allowed
+// Cross-agent communication requires agentToAgent.enabled=true
+
+await send_message({
+  team_name: "alpha-squad",
+  type: "message",
+  recipient: "agent:main:user:teammate:uuid",
+  content: "Task assignment",
 });
 ```
+
+**Implementation Note**: The current `send_message` tool checks agentToAgent policy but stores messages in inbox files for context injection. Future versions may use `sessions_send` for Gateway-based delivery.
 
 ## Integration Points
 

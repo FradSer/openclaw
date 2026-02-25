@@ -37,6 +37,18 @@ vi.mock("../../../teams/manager.js", () => ({
   },
 }));
 
+// Mock config for agentToAgent policy
+vi.mock("../../../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({
+    tools: {
+      agentToAgent: {
+        enabled: true,
+        allow: ["*"],
+      },
+    },
+  })),
+}));
+
 describe("TeamCreate Tool", () => {
   let mockManager: {
     addMember: ReturnType<typeof vi.fn>;
@@ -672,6 +684,80 @@ describe("TeamCreate Tool", () => {
       expect(metadata.createdAt).toBeLessThanOrEqual(afterTimestamp);
       expect(metadata.updatedAt).toBeGreaterThanOrEqual(beforeTimestamp);
       expect(metadata.updatedAt).toBeLessThanOrEqual(afterTimestamp);
+    });
+  });
+
+  describe("agentToAgent Policy Warnings", () => {
+    it("should warn when agentToAgent is disabled", async () => {
+      const { loadConfig } = await import("../../../config/config.js");
+      const { teamDirectoryExists } = await import("../../../teams/storage.js");
+      const { getTeamManager } = await import("../../../teams/pool.js");
+
+      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        tools: {
+          agentToAgent: {
+            enabled: false,
+            allow: [],
+          },
+        },
+      });
+      (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
+
+      const tool = createTeamCreateTool();
+      const result = await tool.execute("tool-call-1", { team_name: "test-team" });
+
+      expect(result.details.warnings).toBeDefined();
+      expect(result.details.warnings).toHaveLength(1);
+      expect(result.details.warnings[0]).toContain("tools.agentToAgent is not enabled");
+      expect(result.details.message).toContain("WARNING");
+    });
+
+    it("should warn when agentToAgent.allow does not include wildcard", async () => {
+      const { loadConfig } = await import("../../../config/config.js");
+      const { teamDirectoryExists } = await import("../../../teams/storage.js");
+      const { getTeamManager } = await import("../../../teams/pool.js");
+
+      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["main"],
+          },
+        },
+      });
+      (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
+
+      const tool = createTeamCreateTool();
+      const result = await tool.execute("tool-call-1", { team_name: "test-team" });
+
+      expect(result.details.warnings).toBeDefined();
+      expect(result.details.warnings).toHaveLength(1);
+      expect(result.details.warnings[0]).toContain("tools.agentToAgent.allow does not include '*'");
+    });
+
+    it("should not warn when agentToAgent is enabled with wildcard", async () => {
+      const { loadConfig } = await import("../../../config/config.js");
+      const { teamDirectoryExists } = await import("../../../teams/storage.js");
+      const { getTeamManager } = await import("../../../teams/pool.js");
+
+      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["main", "*"],
+          },
+        },
+      });
+      (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
+
+      const tool = createTeamCreateTool();
+      const result = await tool.execute("tool-call-1", { team_name: "test-team" });
+
+      expect(result.details.warnings).toBeUndefined();
+      expect(result.details.message).not.toContain("WARNING");
     });
   });
 });

@@ -29,6 +29,18 @@ vi.mock("node:crypto", () => ({
   randomUUID: vi.fn(),
 }));
 
+// Mock config for agentToAgent policy
+vi.mock("../../../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({
+    tools: {
+      agentToAgent: {
+        enabled: true,
+        allow: ["main", "*"],
+      },
+    },
+  })),
+}));
+
 describe("SendMessage Tool", () => {
   const mockTeamName = "test-team";
   const mockTeamsDir = "/tmp/openclaw";
@@ -588,6 +600,197 @@ describe("SendMessage Tool", () => {
           from: "unknown",
         }),
       );
+    });
+  });
+
+  describe("agentToAgent Policy Integration", () => {
+    it("should check agentToAgent policy for cross-agent messages", async () => {
+      const { loadConfig } = await import("../../../config/config.js");
+      const leadSessionKey = "agent:main:user@example.com:main";
+      const teammateSessionKey = "agent:main:user@example.com:teammate:abc123";
+
+      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["main", "*"],
+          },
+        },
+      });
+
+      const tool = createSendMessageTool({ agentSessionKey: leadSessionKey });
+
+      const result = await tool.execute("tool-call-1", {
+        team_name: mockTeamName,
+        type: "message",
+        recipient: teammateSessionKey,
+        content: "Task assignment",
+      });
+
+      expect((result.details as { delivered: boolean }).delivered).toBe(true);
+    });
+
+    it("should return error when agentToAgent is disabled", async () => {
+      const { loadConfig } = await import("../../../config/config.js");
+      const leadSessionKey = "agent:lead:user@example.com:main";
+      const teammateSessionKey = "agent:teammate:user@example.com:teammate:abc123";
+
+      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        tools: {
+          agentToAgent: {
+            enabled: false,
+            allow: [],
+          },
+        },
+      });
+
+      const tool = createSendMessageTool({ agentSessionKey: leadSessionKey });
+
+      const result = await tool.execute("tool-call-1", {
+        team_name: mockTeamName,
+        type: "message",
+        recipient: teammateSessionKey,
+        content: "Task assignment",
+      });
+
+      expect((result.details as { error: string }).error).toContain(
+        "Agent-to-agent messaging is disabled",
+      );
+      expect(writeInboxMessage).not.toHaveBeenCalled();
+    });
+
+    it("should return error when agentToAgent policy denies communication", async () => {
+      const { loadConfig } = await import("../../../config/config.js");
+      const leadSessionKey = "agent:restricted:user@example.com:main";
+      const teammateSessionKey = "agent:other:user@example.com:teammate:abc123";
+
+      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["main"],
+          },
+        },
+      });
+
+      const tool = createSendMessageTool({ agentSessionKey: leadSessionKey });
+
+      const result = await tool.execute("tool-call-1", {
+        team_name: mockTeamName,
+        type: "message",
+        recipient: teammateSessionKey,
+        content: "Task assignment",
+      });
+
+      expect((result.details as { error: string }).error).toContain("denied by tools.agentToAgent");
+      expect(writeInboxMessage).not.toHaveBeenCalled();
+    });
+
+    it("should allow messages within same agent (lead to teammate)", async () => {
+      const { loadConfig } = await import("../../../config/config.js");
+      const leadSessionKey = "agent:main:user@example.com:main";
+      const teammateSessionKey = "agent:main:user@example.com:teammate:abc123";
+
+      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        tools: {
+          agentToAgent: {
+            enabled: false,
+            allow: [],
+          },
+        },
+      });
+
+      const tool = createSendMessageTool({ agentSessionKey: leadSessionKey });
+
+      const result = await tool.execute("tool-call-1", {
+        team_name: mockTeamName,
+        type: "message",
+        recipient: teammateSessionKey,
+        content: "Task assignment",
+      });
+
+      expect((result.details as { delivered: boolean }).delivered).toBe(true);
+      expect(writeInboxMessage).toHaveBeenCalled();
+    });
+
+    it("should check policy for broadcast to multiple agents", async () => {
+      const { loadConfig } = await import("../../../config/config.js");
+      const leadSessionKey = "agent:lead:user@example.com:main";
+
+      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["lead", "*"],
+          },
+        },
+      });
+
+      (listMembers as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { sessionKey: leadSessionKey, agentId: "lead", agentType: "lead", status: "idle" },
+        {
+          sessionKey: "agent:worker1:user@example.com:teammate:1",
+          agentId: "worker1",
+          agentType: "worker",
+          status: "idle",
+        },
+        {
+          sessionKey: "agent:worker2:user@example.com:teammate:2",
+          agentId: "worker2",
+          agentType: "worker",
+          status: "idle",
+        },
+      ]);
+
+      const tool = createSendMessageTool({ agentSessionKey: leadSessionKey });
+
+      const result = await tool.execute("tool-call-1", {
+        team_name: mockTeamName,
+        type: "broadcast",
+        content: "Team announcement",
+      });
+
+      expect((result.details as { delivered: boolean }).delivered).toBe(true);
+      expect(writeInboxMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it("should skip recipients denied by policy in broadcast", async () => {
+      const { loadConfig } = await import("../../../config/config.js");
+      const leadSessionKey = "agent:main:user@example.com:main";
+
+      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["main"],
+          },
+        },
+      });
+
+      (listMembers as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { sessionKey: leadSessionKey, agentId: "main", agentType: "lead", status: "idle" },
+        {
+          sessionKey: "agent:other:user@example.com:teammate:1",
+          agentId: "other",
+          agentType: "worker",
+          status: "idle",
+        },
+      ]);
+
+      const tool = createSendMessageTool({ agentSessionKey: leadSessionKey });
+
+      const result = await tool.execute("tool-call-1", {
+        team_name: mockTeamName,
+        type: "broadcast",
+        content: "Team announcement",
+      });
+
+      // When all recipients are denied by policy, delivered is false
+      expect((result.details as { delivered: boolean }).delivered).toBe(false);
+      expect((result.details as { error: string }).error).toContain(
+        "denied by tools.agentToAgent policy",
+      );
+      expect(writeInboxMessage).not.toHaveBeenCalled();
     });
   });
 });
