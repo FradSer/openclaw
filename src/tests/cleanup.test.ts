@@ -13,9 +13,26 @@ import {
   checkpointWAL,
 } from "../teams/cleanup.js";
 
+// Create mock database methods
+const mockPrepareResult = {
+  all: vi.fn(() => []),
+  run: vi.fn(() => ({ changes: 0 })),
+};
+
+const mockDb = {
+  prepare: vi.fn(() => mockPrepareResult),
+  exec: vi.fn(),
+};
+
+const mockManager = {
+  ledger: {
+    getDb: () => mockDb,
+  },
+};
+
 // Mock the pool module
 vi.mock("../teams/pool.js", () => ({
-  getTeamManager: vi.fn(),
+  getTeamManager: vi.fn(() => mockManager),
   closeAll: vi.fn(),
   closeTeamManager: vi.fn(),
 }));
