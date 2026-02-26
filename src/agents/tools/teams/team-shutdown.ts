@@ -4,10 +4,14 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
 import { getTeamManager, closeTeamManager } from "../../../teams/pool.js";
 import {
   deleteTeamDirectory,
+  getTeamDirectory,
+  getTeamsBaseDir,
   readTeamConfig,
   teamDirectoryExists,
   validateTeamNameOrThrow,
@@ -20,6 +24,20 @@ const TeamShutdownSchema = Type.Object({
   team_name: Type.String({ minLength: 1, maxLength: 50 }),
   reason: Type.Optional(Type.String()),
 });
+
+/**
+ * Clean up teammate agent directories
+ * Removes {teamsDir}/{teamName}/agents/ directory
+ */
+async function cleanupTeammateAgentDirs(teamsDir: string, teamName: string): Promise<void> {
+  const teamDir = getTeamDirectory(teamsDir, teamName);
+  const agentsDir = join(teamDir, "agents");
+  try {
+    await rm(agentsDir, { recursive: true, force: true });
+  } catch {
+    // Ignore errors - directory may not exist
+  }
+}
 
 export function createTeamShutdownTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
   return {
@@ -38,7 +56,7 @@ export function createTeamShutdownTool(opts?: { agentSessionKey?: string }): Any
       validateTeamNameOrThrow(teamName);
 
       // Check team exists
-      const teamsDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+      const teamsDir = getTeamsBaseDir();
       if (!(await teamDirectoryExists(teamsDir, teamName))) {
         return jsonResult({
           error: `Team '${teamName}' not found.`,
@@ -66,6 +84,8 @@ export function createTeamShutdownTool(opts?: { agentSessionKey?: string }): Any
         // No active members - can shutdown immediately
         const updatedConfig = { ...config, metadata: { ...config.metadata, status: "shutdown" } };
         await writeTeamConfig(teamsDir, teamName, updatedConfig);
+        // Clean up teammate agent directories before deleting team directory
+        await cleanupTeammateAgentDirs(teamsDir, teamName);
         await deleteTeamDirectory(teamsDir, teamName);
         closeTeamManager(teamName);
 

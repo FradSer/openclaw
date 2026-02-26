@@ -1,21 +1,31 @@
 /**
  * TeammateSpawn Tool
  * Creates a teammate session and adds it to the team as a member
- * Uses proper session key format: agent:{agentId}:teammate:{uuid}
- * Creates real Gateway session for teammate lifecycle management
+ * Uses session key format: agent:teammate-{name}:main
+ * Creates independent agent directory at {teamsDir}/{teamName}/agents/{name}/agent
+ * Creates workspace directory at {teamsDir}/{teamName}/agents/{name}/workspace
  */
 
 import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../../config/config.js";
 import { callGateway } from "../../../gateway/call.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { getTeamManager } from "../../../teams/pool.js";
-import { teamDirectoryExists, validateTeamNameOrThrow } from "../../../teams/storage.js";
-import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
+import {
+  getTeamsBaseDir,
+  teamDirectoryExists,
+  validateTeamNameOrThrow,
+} from "../../../teams/storage.js";
+import { registerTeammateTeam } from "../../agent-scope.js";
+import { AGENT_LANE_TEAMMATE } from "../../lanes.js";
+import {
+  buildTeammateAgentId,
+  buildTeammateSessionKey,
+  resolveTeammateAgentDir,
+  sanitizeTeammateName,
+} from "../../teammate-scope.js";
 import type { AnyAgentTool } from "../common.js";
 import { jsonResult, readStringParam } from "../common.js";
-import { createAgentToAgentPolicy } from "../sessions-access.js";
 
 const TeammateSpawnSchema = Type.Object({
   team_name: Type.String({ minLength: 1, maxLength: 50 }),
@@ -23,15 +33,6 @@ const TeammateSpawnSchema = Type.Object({
   agent_id: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
 });
-
-/**
- * Build teammate session key in standard format
- * Format: agent:{agentId}:teammate:{uuid}
- */
-function buildTeammateSessionKey(agentId: string): string {
-  const normalizedId = normalizeAgentId(agentId);
-  return `agent:${normalizedId}:teammate:${randomUUID()}`;
-}
 
 export function createTeammateSpawnTool(opts?: {
   agentSessionKey?: string;
@@ -49,13 +50,13 @@ export function createTeammateSpawnTool(opts?: {
       // Extract and validate parameters
       const teamName = readStringParam(params, "team_name", { required: true });
       const name = readStringParam(params, "name", { required: true });
-      const agentIdParam = readStringParam(params, "agent_id");
+      const modelParam = readStringParam(params, "model");
 
       // Validate team name
       validateTeamNameOrThrow(teamName);
 
       // Check team exists
-      const teamsDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+      const teamsDir = getTeamsBaseDir();
       if (!(await teamDirectoryExists(teamsDir, teamName))) {
         return jsonResult({
           error: `Team '${teamName}' not found. Please create the team first.`,
@@ -73,35 +74,33 @@ export function createTeammateSpawnTool(opts?: {
         });
       }
 
-      // Determine agent ID for teammate
-      // Use provided agent_id, or team's agent_type, or default to "main"
-      const effectiveAgentId = agentIdParam ?? config.agent_type ?? "main";
+      // Sanitize name for use in agent ID
+      const sanitizedName = sanitizeTeammateName(name);
+      const teammateAgentId = buildTeammateAgentId(sanitizedName);
+      const sessionKey = buildTeammateSessionKey(sanitizedName);
 
-      // Check agentToAgent policy for cross-agent spawning
-      const cfg = loadConfig();
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const requesterAgentId = opts?.agentSessionKey
-        ? resolveAgentIdFromSessionKey(opts.agentSessionKey)
-        : "main";
+      // Resolve and create independent agent directory
+      const agentDir = resolveTeammateAgentDir(teamsDir, teamName, sanitizedName);
 
-      // If spawning a teammate with a different agent ID, check policy
-      if (
-        effectiveAgentId !== requesterAgentId &&
-        !a2aPolicy.isAllowed(requesterAgentId, effectiveAgentId)
-      ) {
-        return jsonResult({
-          error: `Cannot spawn teammate with agent_id '${effectiveAgentId}': denied by tools.agentToAgent policy.`,
-        });
-      }
+      // Resolve workspace directory for teammate (within team structure)
+      const workspaceDir = `${teamsDir}/${teamName}/agents/${sanitizedName}/workspace`;
 
-      // Generate session key in standard format
-      const sessionKey = buildTeammateSessionKey(effectiveAgentId);
-      const teammateId = sessionKey.split(":").pop() ?? randomUUID();
+      // Resolve sessions directory for teammate (within team structure)
+      const sessionsDir = `${teamsDir}/${teamName}/agents/${sanitizedName}/sessions`;
 
       // Create Gateway session for the teammate
       try {
+        // Create independent agent directory structure
+        await mkdir(agentDir, { recursive: true });
+        // Create workspace directory for teammate
+        await mkdir(workspaceDir, { recursive: true });
+        // Create sessions directory for teammate
+        await mkdir(sessionsDir, { recursive: true });
+
+        // Register teammate team mapping for workspace resolution
+        registerTeammateTeam(sanitizedName, teamName, teamsDir);
+
         // Set model if provided
-        const modelParam = readStringParam(params, "model");
         if (modelParam) {
           await callGateway({
             method: "sessions.patch",
@@ -126,19 +125,24 @@ export function createTeammateSpawnTool(opts?: {
           "2. Call task_claim to claim a task you want to work on",
           "3. Do the work required for the task",
           "4. Call task_complete when done",
-          "5. Repeat or wait for messages from teammates",
+          "5. **IMPORTANT: After completing a task, use send_message to notify the team leader of your results**",
+          "6. Repeat or wait for messages from teammates",
           "",
+          "When woken up with a 'new message from teammate' prompt, check your inbox immediately.",
           `Your session key: ${sessionKey}`,
+          `Team leader session key: ${opts?.agentSessionKey || "unknown"}`,
         ].join("\n");
 
+        const idempotencyKey = randomUUID();
         const response = await callGateway<{ runId: string }>({
           method: "agent",
           params: {
             message: initialMessage,
             sessionKey,
             deliver: false,
-            lane: AGENT_LANE_SUBAGENT,
+            lane: AGENT_LANE_TEAMMATE,
             spawnedBy: opts?.agentSessionKey,
+            idempotencyKey,
           },
           timeoutMs: 10_000,
         });
@@ -149,19 +153,23 @@ export function createTeammateSpawnTool(opts?: {
         await manager.addMember({
           name,
           sessionKey,
-          agentId: effectiveAgentId,
+          agentId: teammateAgentId,
           agentType: "member",
           status: "idle",
         });
 
         return jsonResult({
-          teammateId,
+          teammateId: sanitizedName,
           sessionKey,
           runId,
-          agentId: effectiveAgentId,
+          agentId: teammateAgentId,
           name,
           teamName,
           status: "spawned",
+          agentDir,
+          workspaceDir,
+          sessionsDir,
+          leaderSessionKey: opts?.agentSessionKey,
           message: `Teammate '${name}' spawned with session key: ${sessionKey}`,
         });
       } catch (err) {

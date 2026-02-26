@@ -17,6 +17,10 @@ vi.mock("../../../teams/storage.js", () => ({
   readTeamConfig: vi.fn(),
   teamDirectoryExists: vi.fn(),
   validateTeamNameOrThrow: vi.fn(),
+  getTeamsBaseDir: vi.fn(() => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+    return `${stateDir}/teams`;
+  }),
   writeTeamConfig: vi.fn(),
 }));
 
@@ -86,10 +90,10 @@ describe("TeamCreate Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "my-team" });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("my-team");
-      expect(teamDirectoryExists).toHaveBeenCalledWith(process.cwd(), "my-team");
-      expect(createTeamDirectory).toHaveBeenCalledWith(process.cwd(), "my-team");
+      expect(teamDirectoryExists).toHaveBeenCalledWith(`${process.cwd()}/teams`, "my-team");
+      expect(createTeamDirectory).toHaveBeenCalledWith(`${process.cwd()}/teams`, "my-team");
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "my-team",
         expect.objectContaining({
           team_name: "my-team",
@@ -98,7 +102,7 @@ describe("TeamCreate Tool", () => {
           lead: "test-session",
         }),
       );
-      expect(getTeamManager).toHaveBeenCalledWith("my-team", process.cwd());
+      expect(getTeamManager).toHaveBeenCalledWith("my-team", `${process.cwd()}/teams`);
       expect(mockManager.addMember).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "test-session",
@@ -128,7 +132,7 @@ describe("TeamCreate Tool", () => {
       const tool = createTeamCreateTool();
       await tool.execute("tool-call-1", { team_name: "test-team" });
 
-      expect(createTeamDirectory).toHaveBeenCalledWith(process.cwd(), "test-team");
+      expect(createTeamDirectory).toHaveBeenCalledWith(`${process.cwd()}/teams`, "test-team");
     });
 
     it("should initialize SQLite ledger through team manager", async () => {
@@ -141,7 +145,7 @@ describe("TeamCreate Tool", () => {
       const tool = createTeamCreateTool();
       await tool.execute("tool-call-1", { team_name: "test-team" });
 
-      expect(getTeamManager).toHaveBeenCalledWith("test-team", process.cwd());
+      expect(getTeamManager).toHaveBeenCalledWith("test-team", `${process.cwd()}/teams`);
     });
 
     it("should add team lead as member with correct role", async () => {
@@ -200,7 +204,7 @@ describe("TeamCreate Tool", () => {
       });
 
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "research-team",
         expect.objectContaining({
           agent_type: "researcher",
@@ -219,7 +223,7 @@ describe("TeamCreate Tool", () => {
       await tool.execute("tool-call-1", { team_name: "test-team" });
 
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "test-team",
         expect.objectContaining({
           agent_type: "general-purpose",
@@ -264,7 +268,7 @@ describe("TeamCreate Tool", () => {
       });
 
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "ui-team",
         expect.objectContaining({
           description,
@@ -302,7 +306,7 @@ describe("TeamCreate Tool", () => {
       });
 
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "test-team",
         expect.objectContaining({
           description: longDescription,
@@ -582,13 +586,13 @@ describe("TeamCreate Tool", () => {
       const tool = createTeamCreateTool();
       await tool.execute("tool-call-1", { team_name: "test-team" });
 
-      expect(teamDirectoryExists).toHaveBeenCalledWith("/custom/state/dir", "test-team");
+      expect(teamDirectoryExists).toHaveBeenCalledWith("/custom/state/dir/teams", "test-team");
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        "/custom/state/dir",
+        "/custom/state/dir/teams",
         "test-team",
         expect.anything(),
       );
-      expect(getTeamManager).toHaveBeenCalledWith("test-team", "/custom/state/dir");
+      expect(getTeamManager).toHaveBeenCalledWith("test-team", "/custom/state/dir/teams");
 
       delete process.env.OPENCLAW_STATE_DIR;
     });
@@ -604,7 +608,7 @@ describe("TeamCreate Tool", () => {
       await tool.execute("tool-call-1", { team_name: "test-team" });
 
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "test-team",
         expect.objectContaining({
           lead: "unknown",
@@ -623,7 +627,7 @@ describe("TeamCreate Tool", () => {
       await tool.execute("tool-call-1", { team_name: "test-team" });
 
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "test-team",
         expect.objectContaining({
           lead: "custom-session-123",

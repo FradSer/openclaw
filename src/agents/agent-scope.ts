@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -9,8 +10,10 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
+import { getTeamsBaseDir } from "../teams/storage.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeSkillFilter } from "./skills/filter.js";
+import { isTeammateAgentId, parseTeammateName, sanitizeTeammateName } from "./teammate-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 const log = createSubsystemLogger("agent-scope");
 
@@ -252,12 +255,115 @@ export function resolveEffectiveModelFallbacks(params: {
   return agentFallbacksOverride ?? defaultFallbacks;
 }
 
+/**
+ * Find which team a teammate belongs to by scanning team directories
+ * Returns { teamName, teamsDir } if found, undefined otherwise
+ */
+async function findTeammateTeam(
+  teammateName: string,
+): Promise<{ teamName: string; teamsDir: string } | undefined> {
+  const teamsDir = getTeamsBaseDir();
+  const sanitizedName = sanitizeTeammateName(teammateName);
+
+  try {
+    const teamDirs = await fs.readdir(teamsDir);
+    for (const teamName of teamDirs) {
+      const agentDir = path.join(teamsDir, teamName, "agents", sanitizedName);
+      try {
+        const stat = await fs.stat(agentDir);
+        if (stat.isDirectory()) {
+          return { teamName, teamsDir };
+        }
+      } catch {
+        // Directory doesn't exist, continue searching
+      }
+    }
+  } catch {
+    // teams directory doesn't exist
+  }
+  return undefined;
+}
+
+// Cache for teammate team lookups to avoid repeated filesystem scans
+const teammateTeamCache = new Map<string, { teamName: string; teamsDir: string }>();
+
+/**
+ * Get the teammate team cache for external access
+ * Used by session path resolution to find team-specific session directories
+ */
+export function getTeammateTeamCache(): Map<string, { teamName: string; teamsDir: string }> {
+  return teammateTeamCache;
+}
+
+/**
+ * Resolve teammate workspace directory within team structure
+ * Returns path: {teamsDir}/{teamName}/agents/{teammateName}/workspace
+ */
+async function resolveTeammateWorkspaceDir(teammateName: string): Promise<string | undefined> {
+  const sanitizedName = sanitizeTeammateName(teammateName);
+
+  // Check cache first
+  const cached = teammateTeamCache.get(sanitizedName);
+  if (cached) {
+    return path.join(cached.teamsDir, cached.teamName, "agents", sanitizedName, "workspace");
+  }
+
+  // Find which team this teammate belongs to
+  const teamInfo = await findTeammateTeam(sanitizedName);
+  if (!teamInfo) {
+    return undefined;
+  }
+
+  // Cache the result
+  teammateTeamCache.set(sanitizedName, teamInfo);
+
+  return path.join(teamInfo.teamsDir, teamInfo.teamName, "agents", sanitizedName, "workspace");
+}
+
+// Sync version for backwards compatibility - checks cache only
+function resolveTeammateWorkspaceDirSync(teammateName: string): string | undefined {
+  const sanitizedName = sanitizeTeammateName(teammateName);
+  const cached = teammateTeamCache.get(sanitizedName);
+  if (cached) {
+    return path.join(cached.teamsDir, cached.teamName, "agents", sanitizedName, "workspace");
+  }
+  return undefined;
+}
+
+/**
+ * Register teammate team mapping for workspace resolution
+ * Call this when spawning a teammate to populate the cache
+ */
+export function registerTeammateTeam(
+  teammateName: string,
+  teamName: string,
+  teamsDir: string,
+): void {
+  const sanitizedName = sanitizeTeammateName(teammateName);
+  teammateTeamCache.set(sanitizedName, { teamName, teamsDir });
+}
+
 export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
     return stripNullBytes(resolveUserPath(configured));
   }
+
+  // Check if this is a teammate agent
+  if (isTeammateAgentId(id)) {
+    const teammateName = parseTeammateName(id);
+    if (teammateName) {
+      // Try cache first (sync)
+      const cachedWorkspace = resolveTeammateWorkspaceDirSync(teammateName);
+      if (cachedWorkspace) {
+        return cachedWorkspace;
+      }
+      // Fallback: will use default path below, but teammate should have been registered
+      // This handles the case where resolveAgentWorkspaceDir is called before registration
+    }
+  }
+
   const defaultAgentId = resolveDefaultAgentId(cfg);
   if (id === defaultAgentId) {
     const fallback = cfg.agents?.defaults?.workspace?.trim();
@@ -270,12 +376,71 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
 }
 
+/**
+ * Async version of resolveAgentWorkspaceDir that can search filesystem for teammates
+ * Use this when the teammate may not be in cache yet
+ */
+export async function resolveAgentWorkspaceDirAsync(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Promise<string> {
+  const id = normalizeAgentId(agentId);
+  const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
+  if (configured) {
+    return resolveUserPath(configured);
+  }
+
+  // Check if this is a teammate agent
+  if (isTeammateAgentId(id)) {
+    const teammateName = parseTeammateName(id);
+    if (teammateName) {
+      // Try cache first
+      const cachedWorkspace = resolveTeammateWorkspaceDirSync(teammateName);
+      if (cachedWorkspace) {
+        return cachedWorkspace;
+      }
+      // Search filesystem
+      const teammateWorkspace = await resolveTeammateWorkspaceDir(teammateName);
+      if (teammateWorkspace) {
+        return teammateWorkspace;
+      }
+    }
+  }
+
+  // Fall back to sync version for non-teammate or if teammate not found
+  return resolveAgentWorkspaceDir(cfg, agentId);
+}
+
+/**
+ * Sync version of teammate agent directory resolution - checks cache only
+ */
+function resolveTeammateAgentDirSync(teammateName: string): string | undefined {
+  const sanitizedName = sanitizeTeammateName(teammateName);
+  const cached = teammateTeamCache.get(sanitizedName);
+  if (cached) {
+    return path.join(cached.teamsDir, cached.teamName, "agents", sanitizedName, "agent");
+  }
+  return undefined;
+}
+
 export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
   if (configured) {
     return resolveUserPath(configured);
   }
+
+  // Check if this is a teammate agent
+  if (isTeammateAgentId(id)) {
+    const teammateName = parseTeammateName(id);
+    if (teammateName) {
+      const cachedAgentDir = resolveTeammateAgentDirSync(teammateName);
+      if (cachedAgentDir) {
+        return cachedAgentDir;
+      }
+    }
+  }
+
   const root = resolveStateDir(process.env);
   return path.join(root, "agents", id, "agent");
 }

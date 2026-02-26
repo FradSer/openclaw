@@ -1,7 +1,7 @@
 /**
  * SendMessage Tool
  * Sends messages between team members via inbox directories
- * Enforces agentToAgent policy for cross-agent communication
+ * Bypasses agentToAgent policy for intra-team communication
  */
 
 import { randomUUID } from "node:crypto";
@@ -9,8 +9,9 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../../config/config.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { writeInboxMessage, listMembers } from "../../../teams/inbox.js";
-import { validateTeamNameOrThrow } from "../../../teams/storage.js";
+import { getTeamsBaseDir, validateTeamNameOrThrow } from "../../../teams/storage.js";
 import type { TeamMessage } from "../../../teams/types.js";
+import { isTeammateAgentId } from "../../teammate-scope.js";
 import type { AnyAgentTool } from "../common.js";
 import { jsonResult, readStringParam } from "../common.js";
 import { createAgentToAgentPolicy, type AgentToAgentPolicy } from "../sessions-access.js";
@@ -40,15 +41,54 @@ function summarizeMessage(content: string, maxWords = 10): string {
 }
 
 /**
+ * Check if sender is a teammate agent
+ * Teammates are identified by agent IDs starting with "teammate-"
+ * Intra-team communication bypasses agentToAgent policy
+ */
+function isIntraTeamCommunication(params: {
+  senderSessionKey: string | undefined;
+  recipientSessionKey: string;
+}): boolean {
+  const { senderSessionKey, recipientSessionKey } = params;
+
+  // Resolve agent ID from sender session key
+  const senderAgentId = senderSessionKey
+    ? resolveAgentIdFromSessionKey(senderSessionKey)
+    : undefined;
+
+  // If sender is a teammate, bypass agentToAgent for team communication
+  if (senderAgentId && isTeammateAgentId(senderAgentId)) {
+    return true;
+  }
+
+  // Also check if recipient is a teammate (for non-teammate sender)
+  // This allows main agent to message teammates without policy
+  if (recipientSessionKey.startsWith("agent:")) {
+    const recipientAgentId = resolveAgentIdFromSessionKey(recipientSessionKey);
+    if (recipientAgentId && isTeammateAgentId(recipientAgentId)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Check if agentToAgent policy allows communication between sender and recipient
  * Returns { allowed: true } if communication is permitted, or error message if not
+ * Intra-team communication (both parties are teammates) bypasses policy
  */
 function checkAgentToAgentPolicy(params: {
   a2aPolicy: AgentToAgentPolicy;
   senderSessionKey: string | undefined;
   recipientSessionKey: string;
-}): { allowed: boolean; error?: string } {
+}): { allowed: boolean; error?: string; bypassed?: boolean } {
   const { a2aPolicy, senderSessionKey, recipientSessionKey } = params;
+
+  // Intra-team communication bypasses agentToAgent policy entirely
+  if (isIntraTeamCommunication({ senderSessionKey, recipientSessionKey })) {
+    return { allowed: true, bypassed: true };
+  }
 
   // Resolve agent IDs from session keys
   const senderAgentId = senderSessionKey
@@ -121,7 +161,7 @@ export function createSendMessageTool(opts?: { agentSessionKey?: string }): AnyA
       const senderSessionKey = opts?.agentSessionKey;
 
       // Get team directory
-      const teamsDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+      const teamsDir = getTeamsBaseDir();
 
       // Generate message ID
       const messageId = randomUUID();

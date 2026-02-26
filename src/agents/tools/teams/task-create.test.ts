@@ -23,6 +23,10 @@ vi.mock("node:crypto", () => ({
 vi.mock("../../../teams/storage.js", () => ({
   readTeamConfig: vi.fn(),
   validateTeamNameOrThrow: vi.fn(),
+  getTeamsBaseDir: vi.fn(() => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+    return `${stateDir}/teams`;
+  }),
 }));
 
 // Mock manager and pool modules
@@ -76,7 +80,7 @@ describe("TaskCreate Tool", () => {
       });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("my-team");
-      expect(getTeamManager).toHaveBeenCalledWith("my-team", process.cwd());
+      expect(getTeamManager).toHaveBeenCalledWith("my-team", `${process.cwd()}/teams`);
       expect(mockManager.createTask).toHaveBeenCalledWith(
         "Implement feature",
         "Detailed description of the feature",
@@ -456,7 +460,7 @@ describe("TaskCreate Tool", () => {
         description: "Test description",
       });
 
-      expect(getTeamManager).toHaveBeenCalledWith("my-team", "/custom/state/dir");
+      expect(getTeamManager).toHaveBeenCalledWith("my-team", "/custom/state/dir/teams");
 
       delete process.env.OPENCLAW_STATE_DIR;
     });

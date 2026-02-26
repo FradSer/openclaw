@@ -5,6 +5,9 @@
 
 import { appendFile, mkdir, readFile, unlink } from "fs/promises";
 import { join } from "path";
+import { isTeammateAgentId } from "../agents/teammate-scope.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
 /**
  * Sanitize session key for use as directory name
@@ -40,6 +43,7 @@ export async function ensureInboxDirectory(
 
 /**
  * Write a message to a session's inbox
+ * If the recipient is a teammate, triggers a heartbeat wake to notify them
  */
 export async function writeInboxMessage(
   teamName: string,
@@ -51,6 +55,17 @@ export async function writeInboxMessage(
   const messagesFile = join(inboxPath, "messages.jsonl");
   const line = JSON.stringify(message) + "\n";
   await appendFile(messagesFile, line, { mode: 0o600 });
+
+  // Wake up teammate if this is a teammate session
+  if (recipient.startsWith("agent:")) {
+    const agentId = resolveAgentIdFromSessionKey(recipient);
+    if (isTeammateAgentId(agentId)) {
+      requestHeartbeatNow({
+        sessionKey: recipient,
+        reason: "hook:teammate-message",
+      });
+    }
+  }
 }
 
 /**
@@ -132,7 +147,7 @@ export async function listMembers(
     const manager = getTeamManager(teamName, teamsDir);
     const members = manager.listMembers();
     return members.map((m) => ({
-      name: m.name,
+      name: m.name ?? m.sessionKey,
       agentId: m.agentId,
       agentType: m.agentType,
       sessionKey: m.sessionKey,

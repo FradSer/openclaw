@@ -5,7 +5,7 @@
 
 import { Type } from "@sinclair/typebox";
 import { readInboxMessages, clearInboxMessages } from "../../../teams/inbox.js";
-import { validateTeamNameOrThrow } from "../../../teams/storage.js";
+import { getTeamsBaseDir, validateTeamNameOrThrow } from "../../../teams/storage.js";
 import type { AnyAgentTool } from "../common.js";
 import { jsonResult, readStringParam } from "../common.js";
 
@@ -74,7 +74,7 @@ export function createInboxTool(opts?: { agentSessionKey?: string }): AnyAgentTo
 
       validateTeamNameOrThrow(teamName);
 
-      const teamsDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+      const teamsDir = getTeamsBaseDir();
       const sessionKey = opts?.agentSessionKey;
 
       if (!sessionKey) {

@@ -10,6 +10,7 @@ import { loadConfig } from "../../../config/config.js";
 import { getTeamManager } from "../../../teams/pool.js";
 import {
   createTeamDirectory,
+  getTeamsBaseDir,
   teamDirectoryExists,
   validateTeamNameOrThrow,
   writeTeamConfig,
@@ -57,7 +58,7 @@ export function createTeamCreateTool(opts?: { agentSessionKey?: string }): AnyAg
       }
 
       // Check for duplicate team
-      const teamsDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+      const teamsDir = getTeamsBaseDir();
       if (await teamDirectoryExists(teamsDir, teamName)) {
         return jsonResult({
           error: `Team '${teamName}' already exists. Please choose a different name.`,

@@ -6,16 +6,15 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTeammateSpawnTool } from "./teammate-spawn.js";
 
-// Mock randomUUID to return predictable values
-vi.mock("node:crypto", () => ({
-  randomUUID: vi.fn(() => "spawned-session-uuid-5678"),
-}));
-
 // Mock storage modules
 vi.mock("../../../teams/storage.js", () => ({
   readTeamConfig: vi.fn(),
   teamDirectoryExists: vi.fn(),
   validateTeamNameOrThrow: vi.fn(),
+  getTeamsBaseDir: vi.fn(() => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+    return `${stateDir}/teams`;
+  }),
 }));
 
 // Mock manager and pool modules
@@ -26,8 +25,8 @@ vi.mock("../../../teams/pool.js", () => ({
 vi.mock("../../../teams/manager.js", () => ({
   TeamManager: class {
     addMember = vi.fn().mockResolvedValue({
-      sessionKey: "spawned-session-uuid-5678",
-      agentId: "researcher",
+      sessionKey: "agent:teammate-test-researcher:main",
+      agentId: "teammate-test-researcher",
       name: "Test Researcher",
       agentType: "member",
       status: "idle",
@@ -49,21 +48,14 @@ vi.mock("../../../teams/manager.js", () => ({
   },
 }));
 
-// Mock config for agentToAgent policy
-vi.mock("../../../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({
-    tools: {
-      agentToAgent: {
-        enabled: true,
-        allow: ["*"],
-      },
-    },
-  })),
-}));
-
 // Mock Gateway call for session creation
 vi.mock("../../../gateway/call.js", () => ({
   callGateway: vi.fn().mockResolvedValue({ runId: "test-run-id-123" }),
+}));
+
+// Mock fs/promises for mkdir
+vi.mock("node:fs/promises", () => ({
+  mkdir: vi.fn().mockResolvedValue(undefined),
 }));
 
 describe("TeammateSpawn Tool", () => {
@@ -82,8 +74,8 @@ describe("TeammateSpawn Tool", () => {
     // Mock manager
     mockManager = {
       addMember: vi.fn().mockResolvedValue({
-        sessionKey: "spawned-session-uuid-5678",
-        agentId: "researcher",
+        sessionKey: "agent:teammate-test-researcher:main",
+        agentId: "teammate-test-researcher",
         name: "Test Researcher",
         agentType: "member",
         status: "idle",
@@ -123,21 +115,21 @@ describe("TeammateSpawn Tool", () => {
       });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("my-team");
-      expect(teamDirectoryExists).toHaveBeenCalledWith(process.cwd(), "my-team");
-      expect(getTeamManager).toHaveBeenCalledWith("my-team", process.cwd());
+      expect(teamDirectoryExists).toHaveBeenCalledWith(`${process.cwd()}/teams`, "my-team");
+      expect(getTeamManager).toHaveBeenCalledWith("my-team", `${process.cwd()}/teams`);
       expect(mockManager.getTeamConfig).toHaveBeenCalled();
       expect(mockManager.addMember).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "Test Researcher",
-          agentId: "general-purpose",
+          agentId: "teammate-test-researcher",
           agentType: "member",
           status: "idle",
         }),
       );
 
       const details = result.details;
-      expect(details.sessionKey).toBe("agent:general-purpose:teammate:spawned-session-uuid-5678");
-      expect(details.agentId).toBe("general-purpose");
+      expect(details.sessionKey).toBe("agent:teammate-test-researcher:main");
+      expect(details.agentId).toBe("teammate-test-researcher");
       expect(details.name).toBe("Test Researcher");
       expect(details.teamName).toBe("my-team");
     });
@@ -158,14 +150,14 @@ describe("TeammateSpawn Tool", () => {
       expect(mockManager.addMember).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "Frontend Developer",
-          agentId: "general-purpose",
+          agentId: "teammate-frontend-developer",
           agentType: "member",
           status: "idle",
         }),
       );
     });
 
-    it("should generate unique session ID for each spawned teammate", async () => {
+    it("should generate unique session keys for each spawned teammate", async () => {
       const { teamDirectoryExists } = await import("../../../teams/storage.js");
       const { getTeamManager } = await import("../../../teams/pool.js");
 
@@ -182,12 +174,9 @@ describe("TeammateSpawn Tool", () => {
         name: "Teammate 2",
       });
 
-      expect(result1.details.sessionKey).toBe(
-        "agent:general-purpose:teammate:spawned-session-uuid-5678",
-      );
-      expect(result2.details.sessionKey).toBe(
-        "agent:general-purpose:teammate:spawned-session-uuid-5678",
-      );
+      // Each teammate gets a unique session key based on their name
+      expect(result1.details.sessionKey).toBe("agent:teammate-teammate-1:main");
+      expect(result2.details.sessionKey).toBe("agent:teammate-teammate-2:main");
     });
 
     it("should return session information in response", async () => {
@@ -210,10 +199,30 @@ describe("TeammateSpawn Tool", () => {
         teamName: "my-team",
       });
     });
+
+    it("should create agent directory for teammate", async () => {
+      const { mkdir } = await import("node:fs/promises");
+      const { teamDirectoryExists } = await import("../../../teams/storage.js");
+      const { getTeamManager } = await import("../../../teams/pool.js");
+
+      (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
+
+      const tool = createTeammateSpawnTool();
+      await tool.execute("tool-call-1", {
+        team_name: "my-team",
+        name: "Test Agent",
+      });
+
+      expect(mkdir).toHaveBeenCalledWith(
+        expect.stringContaining("my-team/agents/test-agent/agent"),
+        { recursive: true },
+      );
+    });
   });
 
-  describe("Custom Agent Type Handling", () => {
-    it("should use custom agent_id when provided", async () => {
+  describe("Name Sanitization", () => {
+    it("should sanitize teammate name for use in agent ID", async () => {
       const { teamDirectoryExists } = await import("../../../teams/storage.js");
       const { getTeamManager } = await import("../../../teams/pool.js");
 
@@ -222,76 +231,51 @@ describe("TeammateSpawn Tool", () => {
 
       const tool = createTeammateSpawnTool();
       const result = await tool.execute("tool-call-1", {
-        team_name: "research-team",
-        name: "Data Scientist",
-        agent_id: "researcher",
+        team_name: "my-team",
+        name: "Test Researcher!",
       });
 
-      expect(mockManager.addMember).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "researcher",
-        }),
-      );
-      expect(result.details.agentId).toBe("researcher");
+      // Name should be sanitized (lowercase, special chars replaced)
+      expect(result.details.agentId).toBe("teammate-test-researcher");
+      expect(result.details.sessionKey).toBe("agent:teammate-test-researcher:main");
     });
 
-    it("should use team agent_type as default when agent_id not provided", async () => {
+    it("should handle spaces in name", async () => {
       const { teamDirectoryExists } = await import("../../../teams/storage.js");
       const { getTeamManager } = await import("../../../teams/pool.js");
-
-      mockManager.getTeamConfig.mockResolvedValue({
-        team_name: "dev-team",
-        id: "team-uuid",
-        agent_type: "developer",
-        metadata: { status: "active" },
-      });
 
       (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
 
       const tool = createTeammateSpawnTool();
-      await tool.execute("tool-call-1", {
-        team_name: "dev-team",
-        name: "Backend Developer",
+      const result = await tool.execute("tool-call-1", {
+        team_name: "my-team",
+        name: "Frontend Developer",
       });
 
-      expect(mockManager.addMember).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "developer",
-        }),
-      );
+      expect(result.details.agentId).toBe("teammate-frontend-developer");
     });
 
-    it("should use general-purpose when agent_id and team agent_type are both missing", async () => {
+    it("should handle uppercase letters in name", async () => {
       const { teamDirectoryExists } = await import("../../../teams/storage.js");
       const { getTeamManager } = await import("../../../teams/pool.js");
-
-      mockManager.getTeamConfig.mockResolvedValue({
-        team_name: "team",
-        id: "team-uuid",
-        agent_type: "general-purpose",
-        metadata: { status: "active" },
-      });
 
       (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
 
       const tool = createTeammateSpawnTool();
-      await tool.execute("tool-call-1", {
-        team_name: "team",
-        name: "Member",
+      const result = await tool.execute("tool-call-1", {
+        team_name: "my-team",
+        name: "RESEARCHER",
       });
 
-      expect(mockManager.addMember).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "general-purpose",
-        }),
-      );
+      expect(result.details.agentId).toBe("teammate-researcher");
     });
   });
 
   describe("Model Override", () => {
-    it("should accept model parameter (currently not used in implementation)", async () => {
+    it("should accept model parameter and pass to sessions.patch", async () => {
+      const { callGateway } = await import("../../../gateway/call.js");
       const { teamDirectoryExists } = await import("../../../teams/storage.js");
       const { getTeamManager } = await import("../../../teams/pool.js");
 
@@ -305,12 +289,21 @@ describe("TeammateSpawn Tool", () => {
         model: "claude-opus-4",
       });
 
-      // Tool should execute successfully even with model parameter
+      // sessions.patch should be called with model
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.patch",
+          params: expect.objectContaining({ model: "claude-opus-4" }),
+        }),
+      );
+
+      // Tool should execute successfully
       expect(result.details.name).toBe("Test Agent");
       expect(mockManager.addMember).toHaveBeenCalled();
     });
 
     it("should work correctly when model parameter is not provided", async () => {
+      const { callGateway } = await import("../../../gateway/call.js");
       const { teamDirectoryExists } = await import("../../../teams/storage.js");
       const { getTeamManager } = await import("../../../teams/pool.js");
 
@@ -322,6 +315,11 @@ describe("TeammateSpawn Tool", () => {
         team_name: "my-team",
         name: "Test Agent",
       });
+
+      // sessions.patch should NOT be called without model
+      expect(callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.patch" }),
+      );
 
       expect(result.details.name).toBe("Test Agent");
       expect(mockManager.addMember).toHaveBeenCalled();
@@ -619,8 +617,8 @@ describe("TeammateSpawn Tool", () => {
       const tool = createTeammateSpawnTool();
       await tool.execute("tool-call-1", { team_name: "test-team", name: "Test" });
 
-      expect(teamDirectoryExists).toHaveBeenCalledWith("/custom/state/dir", "test-team");
-      expect(getTeamManager).toHaveBeenCalledWith("test-team", "/custom/state/dir");
+      expect(teamDirectoryExists).toHaveBeenCalledWith("/custom/state/dir/teams", "test-team");
+      expect(getTeamManager).toHaveBeenCalledWith("test-team", "/custom/state/dir/teams");
 
       delete process.env.OPENCLAW_STATE_DIR;
     });
@@ -640,10 +638,8 @@ describe("TeammateSpawn Tool", () => {
         name: "New Member",
       });
 
-      expect(result.details.sessionKey).toBe(
-        "agent:general-purpose:teammate:spawned-session-uuid-5678",
-      );
-      expect(result.details.teammateId).toBe("spawned-session-uuid-5678");
+      expect(result.details.sessionKey).toBe("agent:teammate-new-member:main");
+      expect(result.details.teammateId).toBe("new-member");
     });
 
     it("should return teamName in response", async () => {
@@ -702,7 +698,7 @@ describe("TeammateSpawn Tool", () => {
   });
 
   describe("Session Key Format", () => {
-    it("should generate session key in standard format agent:{agentId}:teammate:{uuid}", async () => {
+    it("should generate session key in format agent:teammate-{name}:main", async () => {
       const { teamDirectoryExists } = await import("../../../teams/storage.js");
       const { getTeamManager } = await import("../../../teams/pool.js");
 
@@ -713,15 +709,13 @@ describe("TeammateSpawn Tool", () => {
       const result = await tool.execute("tool-call-1", {
         team_name: "my-team",
         name: "Researcher",
-        agent_id: "researcher",
       });
 
-      // Session key should follow format: agent:{agentId}:teammate:{uuid}
-      expect(result.details.sessionKey).toMatch(/^agent:researcher:teammate:/);
-      expect(result.details.sessionKey).toBe("agent:researcher:teammate:spawned-session-uuid-5678");
+      // Session key should follow format: agent:teammate-{name}:main
+      expect(result.details.sessionKey).toBe("agent:teammate-researcher:main");
     });
 
-    it("should use team's agent_type as default agent ID", async () => {
+    it("should use sanitized name in agent ID", async () => {
       const { teamDirectoryExists } = await import("../../../teams/storage.js");
       const { getTeamManager } = await import("../../../teams/pool.js");
 
@@ -731,58 +725,11 @@ describe("TeammateSpawn Tool", () => {
       const tool = createTeammateSpawnTool();
       const result = await tool.execute("tool-call-1", {
         team_name: "my-team",
-        name: "Worker",
+        name: "Data Scientist",
       });
 
-      // Uses team config's agent_type which is "general-purpose"
-      expect(result.details.sessionKey).toMatch(/^agent:general-purpose:teammate:/);
-    });
-
-    it("should use 'main' as fallback when no agent_type configured", async () => {
-      const { teamDirectoryExists } = await import("../../../teams/storage.js");
-      const { getTeamManager } = await import("../../../teams/pool.js");
-
-      mockManager.getTeamConfig.mockResolvedValue({
-        team_name: "test-team",
-        id: "team-uuid",
-        agent_type: undefined,
-        metadata: { status: "active" },
-      });
-
-      (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
-
-      const tool = createTeammateSpawnTool();
-      const result = await tool.execute("tool-call-1", {
-        team_name: "test-team",
-        name: "Dev",
-      });
-
-      expect(result.details.sessionKey).toMatch(/^agent:main:teammate:/);
-    });
-
-    it("should use explicit agent_id over team's agent_type", async () => {
-      const { teamDirectoryExists } = await import("../../../teams/storage.js");
-      const { getTeamManager } = await import("../../../teams/pool.js");
-
-      mockManager.getTeamConfig.mockResolvedValue({
-        team_name: "test-team",
-        id: "team-uuid",
-        agent_type: "developer",
-        metadata: { status: "active" },
-      });
-
-      (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
-
-      const tool = createTeammateSpawnTool();
-      const result = await tool.execute("tool-call-1", {
-        team_name: "test-team",
-        name: "Dev",
-        agent_id: "custom-agent",
-      });
-
-      expect(result.details.sessionKey).toMatch(/^agent:custom-agent:teammate:/);
+      // Name is sanitized to "data-scientist"
+      expect(result.details.agentId).toBe("teammate-data-scientist");
     });
 
     it("should store session key in member record", async () => {
@@ -796,17 +743,16 @@ describe("TeammateSpawn Tool", () => {
       await tool.execute("tool-call-1", {
         team_name: "my-team",
         name: "Worker",
-        agent_id: "worker",
       });
 
       expect(mockManager.addMember).toHaveBeenCalledWith(
         expect.objectContaining({
-          sessionKey: "agent:worker:teammate:spawned-session-uuid-5678",
+          sessionKey: "agent:teammate-worker:main",
         }),
       );
     });
 
-    it("should return teammateId as the UUID portion", async () => {
+    it("should return teammateId as the sanitized name", async () => {
       const { teamDirectoryExists } = await import("../../../teams/storage.js");
       const { getTeamManager } = await import("../../../teams/pool.js");
 
@@ -819,97 +765,34 @@ describe("TeammateSpawn Tool", () => {
         name: "Worker",
       });
 
-      expect(result.details.teammateId).toBe("spawned-session-uuid-5678");
+      expect(result.details.teammateId).toBe("worker");
     });
   });
 
-  describe("agentToAgent Policy", () => {
-    it("should allow spawning teammate with same agent ID", async () => {
-      const { loadConfig } = await import("../../../config/config.js");
+  describe("Lane Selection", () => {
+    it("should use AGENT_LANE_TEAMMATE for spawning", async () => {
+      const { callGateway } = await import("../../../gateway/call.js");
       const { teamDirectoryExists } = await import("../../../teams/storage.js");
       const { getTeamManager } = await import("../../../teams/pool.js");
-
-      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-        tools: {
-          agentToAgent: {
-            enabled: false, // Even when disabled
-            allow: [],
-          },
-        },
-      });
 
       (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
       (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
 
-      const tool = createTeammateSpawnTool({
-        agentSessionKey: "agent:main:user:main",
-      });
-      const result = await tool.execute("tool-call-1", {
+      const tool = createTeammateSpawnTool();
+      await tool.execute("tool-call-1", {
         team_name: "my-team",
         name: "Worker",
-        agent_id: "main", // Same as requester
       });
 
-      expect(result.details.status).toBe("spawned");
-    });
-
-    it("should deny spawning teammate with different agent ID when policy disabled", async () => {
-      const { loadConfig } = await import("../../../config/config.js");
-      const { teamDirectoryExists } = await import("../../../teams/storage.js");
-      const { getTeamManager } = await import("../../../teams/pool.js");
-
-      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-        tools: {
-          agentToAgent: {
-            enabled: false,
-            allow: [],
-          },
-        },
-      });
-
-      (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
-
-      const tool = createTeammateSpawnTool({
-        agentSessionKey: "agent:main:user:main",
-      });
-      const result = await tool.execute("tool-call-1", {
-        team_name: "my-team",
-        name: "Worker",
-        agent_id: "researcher", // Different from requester
-      });
-
-      expect(result.details.error).toContain("denied by tools.agentToAgent policy");
-    });
-
-    it("should allow spawning with different agent ID when policy allows", async () => {
-      const { loadConfig } = await import("../../../config/config.js");
-      const { teamDirectoryExists } = await import("../../../teams/storage.js");
-      const { getTeamManager } = await import("../../../teams/pool.js");
-
-      (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-        tools: {
-          agentToAgent: {
-            enabled: true,
-            allow: ["main", "*"],
-          },
-        },
-      });
-
-      (teamDirectoryExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
-
-      const tool = createTeammateSpawnTool({
-        agentSessionKey: "agent:main:user:main",
-      });
-      const result = await tool.execute("tool-call-1", {
-        team_name: "my-team",
-        name: "Worker",
-        agent_id: "researcher",
-      });
-
-      expect(result.details.status).toBe("spawned");
-      expect(result.details.agentId).toBe("researcher");
+      // Verify agent call uses the teammate lane
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agent",
+          params: expect.objectContaining({
+            lane: "teammate",
+          }),
+        }),
+      );
     });
   });
 });

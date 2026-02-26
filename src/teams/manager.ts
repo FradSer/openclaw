@@ -244,7 +244,7 @@ export class TeamManager {
       LIMIT ?
     `,
       )
-      .all(limit) as TaskRow[];
+      .all(limit) as unknown as TaskRow[];
 
     return rows.map((row) => this.taskFromRow(row));
   }
@@ -441,6 +441,7 @@ export class TeamManager {
    */
   addMember(params: {
     name: string;
+    sessionKey?: string;
     agentId: string;
     agentType?: string;
     status?: "idle" | "working" | "blocked";
@@ -454,6 +455,7 @@ export class TeamManager {
       | string
       | {
           name: string;
+          sessionKey?: string;
           agentId: string;
           agentType?: string;
           status?: "idle" | "working" | "blocked";
@@ -467,12 +469,13 @@ export class TeamManager {
     if (typeof nameOrParams === "object") {
       const {
         name,
+        sessionKey,
         agentId: objAgentId,
         agentType: objAgentType = "lead",
         status = "idle",
       } = nameOrParams;
       const member: TeamMemberExtended = {
-        sessionKey: name,
+        sessionKey: sessionKey ?? name,
         agentId: objAgentId,
         name,
         role: objAgentType === "lead" ? "lead" : "member",

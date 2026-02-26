@@ -6,7 +6,7 @@
 import { readdir, readFile, stat, unlink } from "fs/promises";
 import { join } from "path";
 import { getTeamManager, closeAll, closeTeamManager as closeManager } from "./pool.js";
-import { deleteTeamDirectory } from "./storage.js";
+import { deleteTeamDirectory, getTeamsBaseDir } from "./storage.js";
 
 /**
  * Cleanup old messages from inbox directories
@@ -17,7 +17,7 @@ import { deleteTeamDirectory } from "./storage.js";
 export async function cleanupOldMessages(
   teamName: string,
   maxAge: number = 24 * 60 * 60 * 1000,
-  stateDir: string = process.cwd(),
+  stateDir: string = getTeamsBaseDir(),
 ): Promise<number> {
   const inboxDir = join(stateDir, teamName, "inbox");
   const now = Date.now();
@@ -61,7 +61,7 @@ export async function cleanupOldMessages(
 export async function archiveCompletedTasks(
   teamName: string,
   maxAge: number = 30 * 24 * 60 * 60 * 1000,
-  stateDir: string = process.cwd(),
+  stateDir: string = getTeamsBaseDir(),
 ): Promise<number> {
   const manager = getTeamManager(teamName, stateDir);
   const now = Date.now();
@@ -102,7 +102,7 @@ export async function archiveCompletedTasks(
  * @returns Array of cleaned team names
  */
 export async function cleanupInactiveTeams(
-  stateDir: string = process.cwd(),
+  stateDir: string = getTeamsBaseDir(),
   maxAge: number = 7 * 24 * 60 * 60 * 1000,
   deleteThreshold: boolean = false,
 ): Promise<string[]> {
@@ -161,7 +161,7 @@ export function closeAllManagers(): void {
  */
 export async function checkpointWAL(
   teamName: string,
-  stateDir: string = process.cwd(),
+  stateDir: string = getTeamsBaseDir(),
 ): Promise<void> {
   const manager = getTeamManager(teamName, stateDir);
 
@@ -180,7 +180,7 @@ export async function checkpointWAL(
  */
 export async function getTeamStats(
   teamName: string,
-  stateDir: string = process.cwd(),
+  stateDir: string = getTeamsBaseDir(),
 ): Promise<{
   taskCount: number;
   completedTaskCount: number;

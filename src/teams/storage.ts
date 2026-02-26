@@ -14,6 +14,16 @@ import { join } from "path";
 const TEAM_NAME_REGEX = /^[a-z0-9-]{1,50}$/;
 
 /**
+ * Get the base directory for teams
+ * Teams are stored under a "teams" subdirectory of the state directory
+ * @returns The teams base directory path
+ */
+export function getTeamsBaseDir(): string {
+  const stateDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+  return join(stateDir, "teams");
+}
+
+/**
  * Validate team name format
  */
 export function validateTeamName(teamName: string): boolean {

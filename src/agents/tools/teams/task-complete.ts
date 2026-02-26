@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { writeInboxMessage, listMembers } from "../../../teams/inbox.js";
 import { getTeamManager } from "../../../teams/pool.js";
-import { validateTeamNameOrThrow } from "../../../teams/storage.js";
+import { getTeamsBaseDir, validateTeamNameOrThrow } from "../../../teams/storage.js";
 import type { AnyAgentTool } from "../common.js";
 import { jsonResult, readStringParam } from "../common.js";
 
@@ -39,12 +39,12 @@ export function createTaskCompleteTool(opts?: { agentSessionKey?: string }): Any
       validateTeamNameOrThrow(teamName);
 
       // Get team manager
-      const teamsDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+      const teamsDir = getTeamsBaseDir();
       const manager = getTeamManager(teamName, teamsDir);
 
       // Complete task (handles ownership verification and unblocking)
       const sessionKey = opts?.agentSessionKey || "unknown";
-      const result = manager.completeTask(taskId, sessionKey);
+      const completed = manager.completeTask(taskId);
 
       // Optionally announce completion to team lead
       if (shouldAnnounce) {
@@ -88,9 +88,11 @@ export function createTaskCompleteTool(opts?: { agentSessionKey?: string }): Any
 
       return jsonResult({
         taskId,
-        status: "completed",
-        unblocked: result.unblocked || [],
+        status: completed ? "completed" : "failed",
         announced: shouldAnnounce,
+        hint: completed
+          ? "Consider using send_message to notify your team leader of the results."
+          : undefined,
       });
     },
   };

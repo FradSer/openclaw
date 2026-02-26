@@ -23,6 +23,10 @@ vi.mock("../../../teams/pool.js", () => ({
 vi.mock("../../../teams/storage.js", () => ({
   readTeamConfig: vi.fn(),
   validateTeamNameOrThrow: vi.fn(),
+  getTeamsBaseDir: vi.fn(() => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+    return `${stateDir}/teams`;
+  }),
 }));
 
 vi.mock("node:crypto", () => ({
@@ -44,8 +48,9 @@ vi.mock("../../../config/config.js", () => ({
 describe("SendMessage Tool", () => {
   const mockTeamName = "test-team";
   const mockTeamsDir = "/tmp/openclaw";
-  const mockSenderId = "agent-1";
-  const mockRecipientId = "agent-2";
+  const mockTeamsBaseDir = "/tmp/openclaw/teams";
+  const mockSenderId = "agent:agent-1:main";
+  const mockRecipientId = "agent:agent-2:main";
   const mockMessageId = "msg-123";
 
   beforeEach(() => {
@@ -69,7 +74,7 @@ describe("SendMessage Tool", () => {
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith(mockTeamName);
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           id: mockMessageId,
@@ -107,7 +112,7 @@ describe("SendMessage Tool", () => {
       expect((result.details as { messageId: string }).messageId).toBe(customMessageId);
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           id: customMessageId,
@@ -130,7 +135,7 @@ describe("SendMessage Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           timestamp: expect.any(Number),
@@ -160,11 +165,11 @@ describe("SendMessage Tool", () => {
         content: "Important announcement for everyone",
       });
 
-      expect(listMembers).toHaveBeenCalledWith(mockTeamName, mockTeamsDir);
+      expect(listMembers).toHaveBeenCalledWith(mockTeamName, mockTeamsBaseDir);
       expect(writeInboxMessage).toHaveBeenCalledTimes(2);
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           type: "broadcast",
@@ -174,7 +179,7 @@ describe("SendMessage Tool", () => {
       );
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         "agent-3",
         expect.objectContaining({
           type: "broadcast",
@@ -200,13 +205,13 @@ describe("SendMessage Tool", () => {
       expect(writeInboxMessage).toHaveBeenCalledTimes(1);
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.any(Object),
       );
       expect(writeInboxMessage).not.toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockSenderId,
         expect.any(Object),
       );
@@ -244,7 +249,7 @@ describe("SendMessage Tool", () => {
       expect((result.details as { type: string }).type).toBe("message");
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           type: "message",
@@ -269,7 +274,7 @@ describe("SendMessage Tool", () => {
       expect((result.details as { type: string }).type).toBe("broadcast");
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           type: "broadcast",
@@ -291,7 +296,7 @@ describe("SendMessage Tool", () => {
       expect((result.details as { type: string }).type).toBe("shutdown_request");
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           type: "shutdown_request",
@@ -315,7 +320,7 @@ describe("SendMessage Tool", () => {
       expect((result.details as { type: string }).type).toBe("shutdown_response");
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockSenderId,
         expect.objectContaining({
           type: "shutdown_response",
@@ -341,7 +346,7 @@ describe("SendMessage Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           requestId,
@@ -364,7 +369,7 @@ describe("SendMessage Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockSenderId,
         expect.objectContaining({
           requestId,
@@ -386,7 +391,7 @@ describe("SendMessage Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockSenderId,
         expect.objectContaining({
           approve: true,
@@ -409,7 +414,7 @@ describe("SendMessage Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockSenderId,
         expect.objectContaining({
           approve: false,
@@ -432,7 +437,7 @@ describe("SendMessage Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           summary: "Task completed successfully",
@@ -474,7 +479,7 @@ describe("SendMessage Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           summary: "Custom summary",
@@ -538,7 +543,7 @@ describe("SendMessage Tool", () => {
       expect((result.details as { delivered: boolean }).delivered).toBe(true);
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           content: maxContent,
@@ -574,7 +579,7 @@ describe("SendMessage Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           from: mockSenderId,
@@ -594,7 +599,7 @@ describe("SendMessage Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         mockTeamName,
-        mockTeamsDir,
+        mockTeamsBaseDir,
         mockRecipientId,
         expect.objectContaining({
           from: "unknown",

@@ -103,8 +103,10 @@ describe("Agent Teams Integration", () => {
       }
 
       expect(result.details.status).toBe("spawned");
-      expect(result.details.sessionKey).toMatch(/^agent:custom-agent:teammate:[a-f0-9-]+$/);
-      expect(result.details.teammateId).toMatch(/^[a-f0-9-]+$/);
+      // New format: agent:teammate-{name}:main (not using agent_id parameter)
+      expect(result.details.sessionKey).toBe("agent:teammate-worker:main");
+      // teammateId is now the sanitized name
+      expect(result.details.teammateId).toBe("worker");
     });
   });
 
@@ -196,7 +198,11 @@ describe("Agent Teams Integration", () => {
       expect(completeResult.details.announced).toBe(true);
 
       // Check lead's inbox for announcement
-      const inboxMessages = await readInboxMessages("claim-team", tempDir, leadSessionKey);
+      const inboxMessages = await readInboxMessages(
+        "claim-team",
+        `${tempDir}/teams`,
+        leadSessionKey,
+      );
       const announceMsg = inboxMessages.find((m: { type: string }) => m.type === "task_complete");
       expect(announceMsg).toBeDefined();
       expect(announceMsg.content).toContain("completed");
@@ -238,7 +244,7 @@ describe("Agent Teams Integration", () => {
       expect(msgResult.details.delivered).toBe(true);
 
       // Check teammate's inbox
-      const inboxMessages = await readInboxMessages("msg-team", tempDir, workerKey);
+      const inboxMessages = await readInboxMessages("msg-team", `${tempDir}/teams`, workerKey);
       expect(inboxMessages.length).toBeGreaterThan(0);
       expect(inboxMessages[0].content).toBe("Hello from the lead!");
     });
@@ -277,7 +283,8 @@ describe("Agent Teams Integration", () => {
         agent_id: "researcher",
       });
 
-      expect(spawnResult.details.error).toContain("denied by tools.agentToAgent policy");
+      // Teammates are now full agents, not restricted by agentToAgent policy
+      expect(spawnResult.details.status).toBe("spawned");
     });
   });
 

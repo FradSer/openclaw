@@ -5,7 +5,7 @@
 
 import { Type } from "@sinclair/typebox";
 import { getTeamManager } from "../../../teams/pool.js";
-import { validateTeamNameOrThrow } from "../../../teams/storage.js";
+import { getTeamsBaseDir, validateTeamNameOrThrow } from "../../../teams/storage.js";
 import type { AnyAgentTool } from "../common.js";
 import { jsonResult, readStringParam } from "../common.js";
 
@@ -31,7 +31,7 @@ export function createTaskClaimTool(opts?: { agentSessionKey?: string }): AnyAge
       validateTeamNameOrThrow(teamName);
 
       // Get team manager
-      const teamsDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+      const teamsDir = getTeamsBaseDir();
       const manager = getTeamManager(teamName, teamsDir);
 
       // Claim task

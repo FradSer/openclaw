@@ -26,6 +26,10 @@ type TaskListResultData = {
 // Mock the dependencies
 vi.mock("../../../teams/storage.js", () => ({
   validateTeamNameOrThrow: vi.fn(),
+  getTeamsBaseDir: vi.fn(() => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+    return `${stateDir}/teams`;
+  }),
 }));
 
 vi.mock("../../../teams/pool.js", () => ({
@@ -1196,7 +1200,7 @@ describe("TaskList Tool", () => {
         team_name: "test-team",
       });
 
-      expect(getTeamManager).toHaveBeenCalledWith("test-team", "/tmp/openclaw-test");
+      expect(getTeamManager).toHaveBeenCalledWith("test-team", "/tmp/openclaw-test/teams");
     });
 
     it("should use OPENCLAW_STATE_DIR when set", async () => {
@@ -1214,7 +1218,7 @@ describe("TaskList Tool", () => {
         team_name: "test-team",
       });
 
-      expect(getTeamManager).toHaveBeenCalledWith("test-team", "/custom/state/dir");
+      expect(getTeamManager).toHaveBeenCalledWith("test-team", "/custom/state/dir/teams");
     });
 
     it("should call validateTeamNameOrThrow", async () => {

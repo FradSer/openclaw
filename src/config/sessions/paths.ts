@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getTeammateTeamCache } from "../../agents/agent-scope.js";
+import {
+  isTeammateAgentId,
+  parseTeammateName,
+  sanitizeTeammateName,
+} from "../../agents/teammate-scope.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
@@ -10,8 +16,21 @@ function resolveAgentSessionsDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): string {
-  const root = resolveStateDir(env, homedir);
   const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
+
+  // Check if this is a teammate agent - use team-specific sessions directory
+  if (isTeammateAgentId(id)) {
+    const teammateName = parseTeammateName(id);
+    if (teammateName) {
+      const sanitizedName = sanitizeTeammateName(teammateName);
+      const cached = getTeammateTeamCache().get(sanitizedName);
+      if (cached) {
+        return path.join(cached.teamsDir, cached.teamName, "agents", sanitizedName, "sessions");
+      }
+    }
+  }
+
+  const root = resolveStateDir(env, homedir);
   return path.join(root, "agents", id, "sessions");
 }
 

@@ -9,6 +9,10 @@ import { createTaskCompleteTool } from "./task-complete.js";
 // Mock storage modules
 vi.mock("../../../teams/storage.js", () => ({
   validateTeamNameOrThrow: vi.fn(),
+  getTeamsBaseDir: vi.fn(() => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+    return `${stateDir}/teams`;
+  }),
 }));
 
 // Mock manager and pool modules
@@ -169,7 +173,7 @@ describe("TaskComplete Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         "test-team",
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "agent:main:user:main",
         expect.objectContaining({
           type: "task_complete",
@@ -258,7 +262,7 @@ describe("TaskComplete Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         "test-team",
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "agent:main:user:main",
         expect.objectContaining({
           content: "Task task-2 completed successfully.",

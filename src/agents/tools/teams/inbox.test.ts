@@ -16,16 +16,21 @@ vi.mock("../../../teams/inbox.js", () => ({
 
 vi.mock("../../../teams/storage.js", () => ({
   validateTeamNameOrThrow: vi.fn(),
+  getTeamsBaseDir: vi.fn(() => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+    return `${stateDir}/teams`;
+  }),
 }));
 
 describe("Inbox Tool", () => {
   const mockTeamName = "test-team";
-  const mockTeamsDir = "/tmp/openclaw";
+  const mockStateDir = "/tmp/openclaw";
+  const mockTeamsDir = "/tmp/openclaw/teams";
   const mockSessionKey = "agent:main:user@example.com:teammate:abc123";
 
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env.OPENCLAW_STATE_DIR = mockTeamsDir;
+    process.env.OPENCLAW_STATE_DIR = mockStateDir;
     (validateTeamNameOrThrow as ReturnType<typeof vi.fn>).mockImplementation(() => {});
   });
 

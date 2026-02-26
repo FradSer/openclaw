@@ -16,10 +16,17 @@ vi.mock("node:crypto", () => ({
 // Mock storage modules
 vi.mock("../../../teams/storage.js", () => ({
   deleteTeamDirectory: vi.fn(),
+  getTeamDirectory: vi.fn((teamsDir, teamName) => `${teamsDir}/${teamName}`),
   readTeamConfig: vi.fn(),
   teamDirectoryExists: vi.fn(),
   validateTeamNameOrThrow: vi.fn(),
+  getTeamsBaseDir: vi.fn(),
   writeTeamConfig: vi.fn(),
+}));
+
+// Mock fs/promises for rm
+vi.mock("node:fs/promises", () => ({
+  rm: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock manager and pool modules
@@ -42,8 +49,15 @@ describe("TeamShutdown Tool", () => {
     storeMessage: ReturnType<typeof vi.fn>;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+
+    // Set up getTeamsBaseDir mock to return the teams path
+    const { getTeamsBaseDir } = await import("../../../teams/storage.js");
+    (getTeamsBaseDir as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      const stateDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
+      return `${stateDir}/teams`;
+    });
 
     // Mock manager
     mockManager = {
@@ -76,7 +90,7 @@ describe("TeamShutdown Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "my-team" });
 
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "my-team",
         expect.objectContaining({
           metadata: expect.objectContaining({ status: "shutdown" }),
@@ -106,7 +120,7 @@ describe("TeamShutdown Tool", () => {
       const tool = createTeamShutdownTool();
       await tool.execute("tool-call-1", { team_name: "my-team" });
 
-      expect(deleteTeamDirectory).toHaveBeenCalledWith(process.cwd(), "my-team");
+      expect(deleteTeamDirectory).toHaveBeenCalledWith(`${process.cwd()}/teams`, "my-team");
     });
 
     it("should return deleted: true in response", async () => {
@@ -370,13 +384,13 @@ describe("TeamShutdown Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "my-team" });
 
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "my-team",
         expect.objectContaining({
           metadata: expect.objectContaining({ status: "shutdown" }),
         }),
       );
-      expect(deleteTeamDirectory).toHaveBeenCalledWith(process.cwd(), "my-team");
+      expect(deleteTeamDirectory).toHaveBeenCalledWith(`${process.cwd()}/teams`, "my-team");
       expect(closeTeamManager).toHaveBeenCalledWith("my-team");
 
       expect(result.details).toMatchObject({
@@ -594,8 +608,8 @@ describe("TeamShutdown Tool", () => {
       const tool = createTeamShutdownTool();
       await tool.execute("tool-call-1", { team_name: "test-team" });
 
-      expect(teamDirectoryExists).toHaveBeenCalledWith("/custom/state/dir", "test-team");
-      expect(deleteTeamDirectory).toHaveBeenCalledWith("/custom/state/dir", "test-team");
+      expect(teamDirectoryExists).toHaveBeenCalledWith("/custom/state/dir/teams", "test-team");
+      expect(deleteTeamDirectory).toHaveBeenCalledWith("/custom/state/dir/teams", "test-team");
 
       delete process.env.OPENCLAW_STATE_DIR;
     });
@@ -656,13 +670,13 @@ describe("TeamShutdown Tool", () => {
 
       expect(mockManager.storeMessage).not.toHaveBeenCalled();
       expect(writeTeamConfig).toHaveBeenCalledWith(
-        process.cwd(),
+        `${process.cwd()}/teams`,
         "my-team",
         expect.objectContaining({
           metadata: expect.objectContaining({ status: "shutdown" }),
         }),
       );
-      expect(deleteTeamDirectory).toHaveBeenCalledWith(process.cwd(), "my-team");
+      expect(deleteTeamDirectory).toHaveBeenCalledWith(`${process.cwd()}/teams`, "my-team");
       expect(result.details).toMatchObject({
         status: "shutdown",
         deleted: true,
