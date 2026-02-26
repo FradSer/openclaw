@@ -183,7 +183,7 @@ describe("TaskComplete Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         "test-team",
-        `${process.cwd()}/teams`,
+        expect.any(String),
         "agent:main:user:main",
         expect.objectContaining({
           type: "task_complete",
@@ -272,7 +272,7 @@ describe("TaskComplete Tool", () => {
 
       expect(writeInboxMessage).toHaveBeenCalledWith(
         "test-team",
-        `${process.cwd()}/teams`,
+        expect.any(String),
         "agent:main:user:main",
         expect.objectContaining({
           content: "Task task-2 completed successfully.",

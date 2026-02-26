@@ -3,6 +3,8 @@
  * Tests for TeamManager connection caching and cleanup
  */
 
+import os from "os";
+import path from "path";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { TeamManager } from "./manager.js";
 import { getTeamManager, closeTeamManager, closeAll, resolveStateDir } from "./pool.js";
@@ -164,7 +166,8 @@ describe("Connection Pooling", () => {
 
       try {
         const stateDir = resolveStateDir();
-        expect(stateDir).toBe(customPath);
+        // Use path.resolve to match platform-specific behavior
+        expect(stateDir).toBe(path.resolve(customPath));
       } finally {
         if (originalEnv === undefined) {
           delete process.env.OPENCLAW_STATE_DIR;
@@ -180,7 +183,9 @@ describe("Connection Pooling", () => {
 
       try {
         const stateDir = resolveStateDir();
-        expect(stateDir).not.toContain("~");
+        // On Windows, short paths may contain ~ (e.g., RUNNER~1)
+        // So we only check that the path starts with ~ was expanded to homedir
+        expect(stateDir.startsWith(os.homedir())).toBe(true);
         expect(stateDir).toContain("custom");
       } finally {
         if (originalEnv === undefined) {
