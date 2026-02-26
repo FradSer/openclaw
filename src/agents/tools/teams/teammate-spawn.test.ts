@@ -231,7 +231,8 @@ describe("TeammateSpawn Tool", () => {
       });
 
       expect(mkdir).toHaveBeenCalledWith(
-        expect.stringContaining("my-team/agents/test-agent/agent"),
+        // Use regex to match path with either forward or backslash separators (Windows)
+        expect.stringMatching(/my-team[/\\]agents[/\\]test-agent[/\\]agent/),
         { recursive: true },
       );
     });
