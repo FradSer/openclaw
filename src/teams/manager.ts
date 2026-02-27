@@ -295,7 +295,7 @@ export class TeamManager {
       return { success: false, taskId, reason: "Task is deleted" };
     }
 
-    if (row.assignee && row.assignee !== "" && memberName && row.assignee !== memberName) {
+    if (row.assignee && row.assignee !== "" && row.assignee !== memberName) {
       return { success: false, taskId, reason: "Task is assigned to another agent" };
     }
 
