@@ -33,8 +33,12 @@ export function createTaskAutoClaimTool(opts?: { agentSessionKey?: string }): An
       const teamsDir = getTeamsBaseDir();
       const manager = getTeamManager(teamName, teamsDir);
 
+      // Resolve agent's member name for assignment filtering
+      const sessionKey = opts?.agentSessionKey || "unknown";
+      const memberName = manager.getMemberName(sessionKey);
+
       // Find next available task
-      const availableTasks = manager.findAvailableTask(1);
+      const availableTasks = manager.findAvailableTask(1, memberName);
 
       if (availableTasks.length === 0) {
         return jsonResult({
@@ -48,8 +52,7 @@ export function createTaskAutoClaimTool(opts?: { agentSessionKey?: string }): An
       const task = availableTasks[0];
 
       // Claim the task
-      const sessionKey = opts?.agentSessionKey || "unknown";
-      const result = manager.claimTask(task.id, sessionKey);
+      const result = manager.claimTask(task.id, sessionKey, memberName);
 
       if (result.success) {
         return jsonResult({

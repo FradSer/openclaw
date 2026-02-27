@@ -34,9 +34,10 @@ export function createTaskClaimTool(opts?: { agentSessionKey?: string }): AnyAge
       const teamsDir = getTeamsBaseDir();
       const manager = getTeamManager(teamName, teamsDir);
 
-      // Claim task
+      // Claim task with assignment enforcement
       const sessionKey = opts?.agentSessionKey || "unknown";
-      const result = manager.claimTask(taskId, sessionKey);
+      const memberName = manager.getMemberName(sessionKey);
+      const result = manager.claimTask(taskId, sessionKey, memberName);
 
       if (result.success) {
         return jsonResult({

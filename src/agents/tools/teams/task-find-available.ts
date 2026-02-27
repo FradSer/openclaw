@@ -14,7 +14,7 @@ const TaskFindAvailableSchema = Type.Object({
   limit: Type.Optional(Type.Number({ default: 10 })),
 });
 
-export function createTaskFindAvailableTool(_opts?: { agentSessionKey?: string }): AnyAgentTool {
+export function createTaskFindAvailableTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
   return {
     label: "Task Find Available",
     name: "task_find_available",
@@ -35,8 +35,12 @@ export function createTaskFindAvailableTool(_opts?: { agentSessionKey?: string }
       const teamsDir = getTeamsBaseDir();
       const manager = getTeamManager(teamName, teamsDir);
 
+      // Resolve agent's member name for assignment filtering
+      const sessionKey = opts?.agentSessionKey;
+      const memberName = sessionKey ? manager.getMemberName(sessionKey) : undefined;
+
       // Find available tasks
-      const tasks = manager.findAvailableTask(limit);
+      const tasks = manager.findAvailableTask(limit, memberName);
 
       return jsonResult({
         tasks,
