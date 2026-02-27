@@ -5,6 +5,7 @@
 
 import { constants } from "fs";
 import { access, mkdir, readFile, rm, writeFile } from "fs/promises";
+import { homedir } from "os";
 import { join } from "path";
 
 /**
@@ -17,11 +18,13 @@ const TEAM_NAME_REGEX = /^[a-z0-9-]{1,50}$/;
  * Get the base directory for teams
  * Teams are stored under a "teams" subdirectory of the state directory.
  *
- * For teammate agents, the cwd and OPENCLAW_STATE_DIR may not point to the
- * parent agent's workspace (where the team was created). In that case we
- * walk up from the teammate's own workspace/agent directory — which lives
- * inside the team structure at {teamsDir}/{teamName}/agents/{name}/ — to
- * find the enclosing teams directory.
+ * Resolution order:
+ * 1. OPENCLAW_STATE_DIR env var — explicit override for all state.
+ * 2. CWD inside a team structure — teammate agents whose workspace/agent
+ *    dir lives at {teamsDir}/{teamName}/agents/{name}/ resolve upward.
+ * 3. Global state directory (~/.openclaw/teams) — teams are shared
+ *    coordination state, so they live alongside config and sessions
+ *    rather than in any single agent's workspace.
  *
  * @returns The teams base directory path
  */
@@ -42,8 +45,8 @@ export function getTeamsBaseDir(): string {
     return teamsMatch[1];
   }
 
-  // 3. Default: teams dir under cwd
-  return join(cwd, "teams");
+  // 3. Default: global state directory — teams are shared across agents
+  return join(homedir(), ".openclaw", "teams");
 }
 
 /**

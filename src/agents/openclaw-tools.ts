@@ -28,6 +28,7 @@ import { createTaskCreateTool } from "./tools/teams/task-create.js";
 import { createTaskFindAvailableTool } from "./tools/teams/task-find-available.js";
 import { createTaskListTool } from "./tools/teams/task-list.js";
 import { createTeamCreateTool } from "./tools/teams/team-create.js";
+import { createTeamJoinTool } from "./tools/teams/team-join.js";
 import { createTeamShutdownTool } from "./tools/teams/team-shutdown.js";
 import { createTeammateSpawnTool } from "./tools/teams/teammate-spawn.js";
 import { createTtsTool } from "./tools/tts-tool.js";
@@ -191,6 +192,9 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
+    }),
+    createTeamJoinTool({
+      agentSessionKey: options?.agentSessionKey,
     }),
     createTeamShutdownTool({
       agentSessionKey: options?.agentSessionKey,
