@@ -51,6 +51,7 @@ export class TeamLedger {
         activeForm TEXT,
         status TEXT NOT NULL CHECK(status IN ('pending', 'claimed', 'in_progress', 'completed', 'failed')),
         owner TEXT,
+        assignee TEXT,
         dependsOn TEXT,
         blockedBy TEXT,
         blocks TEXT,

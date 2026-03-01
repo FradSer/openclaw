@@ -71,6 +71,8 @@ interface CreateTaskOptions {
   activeForm?: string;
   /** Task metadata */
   metadata?: Record<string, unknown>;
+  /** Name of the agent this task is assigned to */
+  assignee?: string;
 }
 
 /**
@@ -122,6 +124,7 @@ interface TaskRow {
   activeForm: string | null;
   status: string;
   owner: string | null;
+  assignee: string | null;
   dependsOn: string | null;
   blockedBy: string | null;
   blocks: string | null;
@@ -192,6 +195,7 @@ export class TeamManager {
       metadata: options?.metadata,
       status: "pending",
       owner: "",
+      assignee: options?.assignee,
       dependsOn: [],
       blockedBy: [],
       blocks: [],
@@ -212,7 +216,7 @@ export class TeamManager {
     const rows = db
       .prepare(`
       SELECT
-        id, subject, description, activeForm, status, owner,
+        id, subject, description, activeForm, status, owner, assignee,
         dependsOn, blockedBy, metadata, createdAt, claimedAt, completedAt
       FROM tasks
       ORDER BY createdAt
@@ -226,15 +230,36 @@ export class TeamManager {
    * Find available tasks that can be claimed
    * Returns tasks that are: pending status, not claimed, no unmet dependencies
    */
-  findAvailableTask(limit = 10): TaskWithComputed[] {
+  findAvailableTask(limit = 10, forAgent?: string): TaskWithComputed[] {
     this.ensureOpen();
     const db = this.ledger.getDb();
+
+    if (forAgent) {
+      const rows = db
+        .prepare(
+          `
+        SELECT
+          id, subject, description, activeForm, status, owner, assignee,
+          dependsOn, blockedBy, metadata, createdAt, claimedAt, completedAt
+        FROM tasks
+        WHERE status = 'pending'
+          AND (owner IS NULL OR owner = '')
+          AND (blockedBy IS NULL OR blockedBy = '[]' OR blockedBy = '')
+          AND (assignee IS NULL OR assignee = '' OR assignee = ?)
+        ORDER BY createdAt ASC
+        LIMIT ?
+      `,
+        )
+        .all(forAgent, limit) as unknown as TaskRow[];
+
+      return rows.map((row) => this.taskFromRow(row));
+    }
 
     const rows = db
       .prepare(
         `
       SELECT
-        id, subject, description, activeForm, status, owner,
+        id, subject, description, activeForm, status, owner, assignee,
         dependsOn, blockedBy, metadata, createdAt, claimedAt, completedAt
       FROM tasks
       WHERE status = 'pending'
@@ -252,7 +277,7 @@ export class TeamManager {
   /**
    * Claim a task for an agent
    */
-  claimTask(taskId: string, agentName: string): TaskClaimResultInternal {
+  claimTask(taskId: string, agentName: string, memberName?: string): TaskClaimResultInternal {
     this.ensureOpen();
 
     const db = this.ledger.getDb();
@@ -268,6 +293,10 @@ export class TeamManager {
 
     if (row.status === "deleted") {
       return { success: false, taskId, reason: "Task is deleted" };
+    }
+
+    if (row.assignee && row.assignee !== "" && row.assignee !== memberName) {
+      return { success: false, taskId, reason: "Task is assigned to another agent" };
     }
 
     if (row.owner && row.owner !== agentName) {
@@ -676,6 +705,18 @@ export class TeamManager {
     }
   }
 
+  /**
+   * Look up a member's name by their session key
+   */
+  getMemberName(sessionKey: string): string | undefined {
+    this.ensureOpen();
+    const db = this.ledger.getDb();
+    const row = db.prepare("SELECT name FROM members WHERE sessionKey = ?").get(sessionKey) as
+      | { name: string | null }
+      | undefined;
+    return row?.name || undefined;
+  }
+
   private ensureOpen(): void {
     if (this.closed) {
       throw new Error("TeamManager is closed");
@@ -685,8 +726,8 @@ export class TeamManager {
   private saveTask(task: TaskWithComputed): void {
     const db = this.ledger.getDb();
     db.prepare(
-      `INSERT INTO tasks (id, subject, description, activeForm, status, owner, dependsOn, blockedBy, metadata, createdAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (id, subject, description, activeForm, status, owner, assignee, dependsOn, blockedBy, metadata, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       task.id,
       task.subject,
@@ -694,6 +735,7 @@ export class TeamManager {
       task.activeForm || null,
       task.status,
       task.owner || null,
+      task.assignee || null,
       task.dependsOn ? JSON.stringify(task.dependsOn) : null,
       task.blockedBy ? JSON.stringify(task.blockedBy) : null,
       task.metadata ? JSON.stringify(task.metadata) : null,
@@ -746,6 +788,7 @@ export class TeamManager {
       activeForm: row.activeForm || undefined,
       status: row.status as TaskWithComputed["status"],
       owner: row.owner || "",
+      assignee: row.assignee || undefined,
       dependsOn: row.dependsOn ? JSON.parse(row.dependsOn) : undefined,
       blockedBy: row.blockedBy ? JSON.parse(row.blockedBy) : [],
       blocks: row.blocks ? JSON.parse(row.blocks) : [],

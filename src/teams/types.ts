@@ -63,6 +63,8 @@ export interface Task {
   status: "pending" | "claimed" | "in_progress" | "completed" | "failed" | "deleted";
   /** Session key of the claiming agent (empty if unassigned) */
   owner?: string;
+  /** Name of the agent this task is assigned to (only that agent can discover/claim it) */
+  assignee?: string;
   /** Array of task IDs that must complete before this task can start */
   dependsOn?: string[];
   /** Computed array of task IDs blocking this task */
@@ -160,6 +162,8 @@ export interface CreateTaskParams {
   metadata?: Record<string, unknown>;
   /** Array of task IDs this task depends on */
   dependsOn?: string[];
+  /** Name of the agent this task is assigned to */
+  assignee?: string;
 }
 
 /**

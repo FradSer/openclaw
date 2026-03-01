@@ -16,6 +16,7 @@ const TaskCreateSchema = Type.Object({
   activeForm: Type.Optional(Type.String({ maxLength: 100 })),
   dependsOn: Type.Optional(Type.Array(Type.String())),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  assignee: Type.Optional(Type.String({ maxLength: 100 })),
 });
 
 export function createTaskCreateTool(_opts?: { agentSessionKey?: string }): AnyAgentTool {
@@ -34,6 +35,7 @@ export function createTaskCreateTool(_opts?: { agentSessionKey?: string }): AnyA
       const activeForm = readStringParam(params, "activeForm");
       const dependsOn = params.dependsOn as string[] | undefined;
       const metadata = params.metadata as Record<string, unknown> | undefined;
+      const assignee = readStringParam(params, "assignee");
 
       // Validate team name
       validateTeamNameOrThrow(teamName);
@@ -46,6 +48,7 @@ export function createTaskCreateTool(_opts?: { agentSessionKey?: string }): AnyA
       const task = manager.createTask(subject, description, {
         activeForm,
         metadata,
+        assignee,
       });
 
       // Handle dependsOn if provided
