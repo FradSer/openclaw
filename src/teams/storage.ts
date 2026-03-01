@@ -82,12 +82,12 @@ export function getTeamConfigPath(teamsDir: string, teamName: string): string {
 }
 
 /**
- * Check if team directory exists
+ * Check if team exists (has config.json, not just a directory)
  */
 export async function teamDirectoryExists(teamsDir: string, teamName: string): Promise<boolean> {
-  const teamPath = getTeamDirectory(teamsDir, teamName);
+  const configPath = getTeamConfigPath(teamsDir, teamName);
   try {
-    await access(teamPath, constants.F_OK);
+    await access(configPath, constants.F_OK);
     return true;
   } catch {
     return false;
