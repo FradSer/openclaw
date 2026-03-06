@@ -157,6 +157,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           try {
             if (status.running) {
               await channelManager.stopChannel(channelId as ChannelId, accountId);
+            } else {
+              channelManager.markManuallyStopped(channelId as ChannelId, accountId);
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
