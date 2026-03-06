@@ -9,11 +9,14 @@ vi.mock("node:child_process", () => ({
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  isSystemdServiceEnabled,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  readSystemdServiceRuntime,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stopSystemdService,
+  uninstallSystemdService,
 } from "./systemd.js";
 
 describe("systemd availability", () => {
@@ -48,7 +51,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("returns false when systemctl is not present", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
       const err = new Error("spawn systemctl EACCES") as Error & { code?: string };
       err.code = "EACCES";
@@ -59,7 +61,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("calls systemctl is-enabled when user systemd is available", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "status"]);
@@ -74,7 +75,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("calls systemctl is-enabled when only system systemd is available", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "status"]);
@@ -94,8 +94,29 @@ describe("isSystemdServiceEnabled", () => {
     expect(result).toBe(true);
   });
 
+  it("treats degraded system systemd (exit 1, no error signals) as available", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const err = new Error("Failed to connect to bus") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "Failed to connect to bus");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--system", "status"]);
+        // exit 1 with no recognised error text = degraded state; systemd is running
+        const err = new Error("") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "State: degraded");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--system", "is-enabled", "openclaw-gateway.service"]);
+        cb(null, "enabled", "");
+      });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(true);
+  });
+
   it("returns false when systemctl reports disabled", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
       .mockImplementationOnce((_cmd, _args, _opts, cb) => {
@@ -108,7 +129,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("returns false when systemctl is-enabled fails for non-state errors", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
       .mockImplementationOnce((_cmd, _args, _opts, cb) => {
@@ -280,5 +300,53 @@ describe("systemd service control", () => {
         env: {},
       }),
     ).rejects.toThrow("systemctl stop failed: permission denied");
+  });
+
+  it("disables the system unit when only system systemd is available", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const err = new Error("Failed to connect to bus") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "Failed to connect to bus");
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", "")) // --system status
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--system", "disable", "--now", "openclaw-gateway.service"]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    await uninstallSystemdService({
+      stdout: { write } as unknown as NodeJS.WritableStream,
+      env: {},
+    });
+    // disable was called with --system; unlink may fail silently since file won't exist in tests
+  });
+
+  it("reads runtime from system scope when user systemd is unavailable", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const err = new Error("Failed to connect to bus") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "Failed to connect to bus");
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", "")) // --system status
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual([
+          "--system",
+          "show",
+          "openclaw-gateway.service",
+          "--no-page",
+          "--property",
+          "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
+        ]);
+        cb(
+          null,
+          "ActiveState=active\nSubState=running\nMainPID=1234\nExecMainStatus=0\nExecMainCode=\n",
+          "",
+        );
+      });
+    const result = await readSystemdServiceRuntime({});
+    expect(result.status).toBe("running");
+    expect(result.state).toBe("active");
   });
 });
