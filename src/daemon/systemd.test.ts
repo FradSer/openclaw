@@ -6,6 +6,12 @@ vi.mock("node:child_process", () => ({
   execFile: execFileMock,
 }));
 
+vi.mock("node:fs/promises", () => ({
+  default: {
+    access: () => Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" })),
+  },
+}));
+
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
@@ -77,34 +83,39 @@ describe("isSystemdServiceEnabled", () => {
       err.code = "EACCES";
       cb(err, "", "");
     });
-    const result = await isSystemdServiceEnabled({ env: {} });
+    const result = await isSystemdServiceEnabled({ env: { HOME: "/home/test" } });
     expect(result).toBe(false);
   });
 
   it("calls systemctl is-enabled when systemctl is present", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
-    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-      expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
-      cb(null, "enabled", "");
-    });
-    const result = await isSystemdServiceEnabled({ env: {} });
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        cb(null, "enabled", "");
+      });
+    const result = await isSystemdServiceEnabled({ env: { HOME: "/home/test" } });
     expect(result).toBe(true);
   });
 
   it("returns false when systemctl reports disabled", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
-    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
-      const err = new Error("disabled") as Error & { code?: number };
-      err.code = 1;
-      cb(err, "disabled", "");
-    });
-    const result = await isSystemdServiceEnabled({ env: {} });
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const err = new Error("disabled") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "disabled", "");
+      });
+    const result = await isSystemdServiceEnabled({ env: { HOME: "/home/test" } });
     expect(result).toBe(false);
   });
 
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
         const err = new Error("Failed to connect to bus") as Error & { code?: number };
@@ -119,23 +130,25 @@ describe("isSystemdServiceEnabled", () => {
         err.code = 1;
         cb(err, "", "permission denied");
       });
-    await expect(isSystemdServiceEnabled({ env: {} })).rejects.toThrow(
+    await expect(isSystemdServiceEnabled({ env: { HOME: "/home/test" } })).rejects.toThrow(
       "systemctl is-enabled unavailable: permission denied",
     );
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
-    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
-      // On Ubuntu 24.04, `systemctl --user is-enabled <unit>` exits with
-      // code 4 and prints "not-found" to stdout when the unit doesn't exist.
-      const err = new Error(
-        "Command failed: systemctl --user is-enabled openclaw-gateway.service",
-      ) as Error & { code?: number };
-      err.code = 4;
-      cb(err, "not-found\n", "");
-    });
-    const result = await isSystemdServiceEnabled({ env: {} });
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        // On Ubuntu 24.04, `systemctl --user is-enabled <unit>` exits with
+        // code 4 and prints "not-found" to stdout when the unit doesn't exist.
+        const err = new Error(
+          "Command failed: systemctl --user is-enabled openclaw-gateway.service",
+        ) as Error & { code?: number };
+        err.code = 4;
+        cb(err, "not-found\n", "");
+      });
+    const result = await isSystemdServiceEnabled({ env: { HOME: "/home/test" } });
     expect(result).toBe(false);
   });
 });
@@ -262,7 +275,7 @@ describe("systemd service control", () => {
     const write = vi.fn();
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
-    await stopSystemdService({ stdout, env: {} });
+    await stopSystemdService({ stdout, env: { HOME: "/home/test" } });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
@@ -278,7 +291,7 @@ describe("systemd service control", () => {
     const write = vi.fn();
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
-    await restartSystemdService({ stdout, env: { OPENCLAW_PROFILE: "work" } });
+    await restartSystemdService({ stdout, env: { OPENCLAW_PROFILE: "work", HOME: "/home/test" } });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
@@ -296,7 +309,7 @@ describe("systemd service control", () => {
     await expect(
       stopSystemdService({
         stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
-        env: {},
+        env: { HOME: "/home/test" },
       }),
     ).rejects.toThrow("systemctl stop failed: permission denied");
   });
@@ -320,7 +333,7 @@ describe("systemd service control", () => {
     const write = vi.fn();
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
-    await restartSystemdService({ stdout, env: { SUDO_USER: "debian" } });
+    await restartSystemdService({ stdout, env: { SUDO_USER: "debian", HOME: "/home/test" } });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
@@ -339,7 +352,10 @@ describe("systemd service control", () => {
     const write = vi.fn();
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
-    await restartSystemdService({ stdout, env: { SUDO_USER: "root", USER: "root" } });
+    await restartSystemdService({
+      stdout,
+      env: { SUDO_USER: "root", USER: "root", HOME: "/home/test" },
+    });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
@@ -385,7 +401,7 @@ describe("systemd service control", () => {
     const write = vi.fn();
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
-    await restartSystemdService({ stdout, env: { USER: "debian" } });
+    await restartSystemdService({ stdout, env: { USER: "debian", HOME: "/home/test" } });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");

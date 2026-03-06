@@ -6,10 +6,12 @@ const windowsUncPath = /^\\\\/;
 
 export function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
-  if (!home) {
-    throw new Error("Missing HOME");
+  if (home) {
+    return home;
   }
-  return home;
+  // No longer use os.userInfo().homedir due to weird failures
+  // Let it throw
+  throw new Error("Missing HOME");
 }
 
 export function resolveUserPathWithHome(input: string, home?: string): string {

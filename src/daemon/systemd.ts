@@ -543,7 +543,7 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
     return false;
   }
-  return false;
+  throw new Error(`systemctl is-enabled unavailable: ${detail}`);
 }
 
 export async function readSystemdServiceRuntime(
